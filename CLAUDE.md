@@ -4,9 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Working.** 360° six-direction (0°/60°/120°/180°/240°/300°) sound source localization on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified by walking around the board at known clock positions. Mean azimuth offset is **< ±5°** when the user speaks at 30–50 cm with voice-level audio. The result is reported over UART both as a raw azimuth/sextant and as a hysteresis-smoothed `stable_sextant`.
+**Working (v1.1).** 360° six-direction sound source localization + servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
 
-Servo driver on GPIO38 is **not yet implemented** — direction output is UART only.
+- DOA: 6-position calibration, mean azimuth offset **< ±5°** at 30–50 cm voice distance.
+- Servo tracking: ±20° mechanical range, **8.7s response time**, **perfectly stable (zero rebound)** thanks to feed-forward compensation. See "Pitfalls §6" for the breakthrough.
+- Direction output: UART log + physical servo pointing.
+
+Tagged `v1.1`. Earlier tags `servo-stable-1.0` (slow but stable, pre-feed-forward), `servo-tracking-1.0` (Phase 1-3 done), `3麦阵列测试完成1.0` (DOA only).
 
 ## Servo hardware (Phase 1-3 implemented, 2026-06-22)
 
@@ -20,15 +24,17 @@ Servo driver on GPIO38 is **not yet implemented** — direction output is UART o
 | Gear mesh style | Pinion runs inside ring (internal mesh, same rotation direction) |
 | Reduction ratio | 50 / 15 = **3.33 : 1** (servo rotates 3.33× for disc to rotate 1×) |
 | Disc coverage for 180° servo travel | 180° / 3.33 = **~54°** of arc |
-| Soft clamp | **±20°** (tighter than 27° mechanical limit — see "Pitfalls §5" below) |
+| Soft clamp | **±20°** (tighter than 27° mechanical limit — see "Pitfalls §5") |
 | Disc mounting position | 12 cm below the mic array, at the 12 o'clock direction |
 
-### Mechanical implications
+### Performance (v1.1, with feed-forward)
 
-- The disc (carrying the mic array through its gimbal) can only sweep **~40° of arc** (±20° soft clamp) — less than one 60° sextant. Full 360° tracking is mechanically impossible with this gear reduction.
-- Effective pointing range: M3 can move from **5:20 o'clock to 6:40 o'clock** about its home position.
-- Practical tracking strategy: fix home at the most common source direction (e.g., user's usual seat at 6oc), servo fine-tunes within ±20°. Sources outside this arc either clamp to the nearest limit or are suppressed entirely (beyond ±45°).
-- Parallax: 12 cm offset between servo and array center is small relative to typical 30–50 cm voice distance — sub-1° angular error, negligible vs the ±15° single-frame DOA noise.
+| Test | Result |
+|---|---|
+| 6oc user, 12s capture | swing = 0.0° (perfectly stable) |
+| 6oc → 7oc transition | first motion at **8.7s**, servo → +20° |
+| 7oc user, 30s long-term | swing = 0.0°, zero rebound |
+| 3oc/9oc (out of range) | suppressed, servo holds last position |
 
 ### Tracking pipeline
 
@@ -36,11 +42,12 @@ Servo driver on GPIO38 is **not yet implemented** — direction output is UART o
 I²S DMA → doa_process → tracker_update → servo_set_angle → LEDC PWM → GPIO38
                               │
                               ▼
-                      Motion-pause gate (skip if servo_is_moving)
-                      Out-of-range gate  (|target| > 45° → suppress)
-                      2-frame agreement (require 2 consecutive agreeing targets)
-                      Deadband           (skip if Δtarget < 3°)
-                      Clamp              (±20°)
+                  Motion-pause gate (500ms holdoff)
+                  Out-of-range gate  (|target| > 45° → suppress)
+                  2-frame agreement (within 5° across consecutive frames)
+                  FEED-FORWARD       (α_room = α_array + β_servo, see §6)
+                  Deadband           (skip if Δtarget < 3°)
+                  Clamp              (±20°)
 ```
 
 ### Phase 4 limitation: UART console
@@ -48,8 +55,6 @@ I²S DMA → doa_process → tracker_update → servo_set_angle → LEDC PWM →
 Console code exists (`main/console.{c,h}`) but UART RX on this board doesn't work — CH343 USB-UART appears to be wired for TX only (ESP32 → host log output). Command input from host isn't physically received by the chip. Bypassing the VFS layer with direct `uart_read_bytes` also failed. Code retained for future hardware that supports bidirectional UART.
 
 Tuning still requires editing `TRACKER_DEFAULT_CONFIG` in `main/tracker.h` and reflashing.
-
-See `SERVO_PLAN.md` for the full development history (5 phases, 3 implemented + 1 hardware-limited).
 
 ## Project goal
 
@@ -220,6 +225,47 @@ Detection that works (in `doa.c`):
 ### 4. clangd diagnostics you can ignore
 
 clangd will report `'sys/features.h' file not found` and unused-include warnings on `freertos/FreeRTOS.h`. These are editor-config artifacts (clangd doesn't see the full ESP-IDF include path); the actual `idf.py build` succeeds. Do not chase them.
+
+### 5. Servo mechanical-endpoint buzzing causes L/R collapse feedback
+
+The JS6620 servo buzzes continuously when commanded to its mechanical limits (±27° gear-reduced). The buzz is acoustic energy that couples through the 3DMIC-291 PCB into both mics on DAT0 (they share the same physical board), making their outputs highly correlated. This trips the `ρ01 > 0.95` L/R collapse detector, which produces phantom 3-mic DOA readings, which feed back to the tracker, which commands more servo motion, which creates more buzz... infinite loop.
+
+**Fix**: clamp the servo range tighter than the mechanical limit (`±20°` instead of `±27°`). The buzzing threshold is somewhere between 20° and 27°; 20° is safely below it.
+
+### 6. Closed-loop feedback oscillation in moving-array DOA — and the feed-forward fix
+
+**This is the single most important pitfall in the servo work.** Without addressing it, you can have either fast response OR stability, not both. The breakthrough (v1.1) was recognizing the root cause and applying a one-line algebraic fix.
+
+**Symptom**: when the servo tracks a source, the array rotates, which shifts the source's perceived azimuth (α_array) in the array's frame. If the tracker uses α_array directly to compute the next servo target, the target shifts after every motion. If the shift crosses a sextant boundary, `stable_sextant` flips, the tracker commands the opposite direction, the array rotates back, α_array flips again — sustained oscillation at ~7s period.
+
+**Things we tried that did NOT fix the root cause** (only masked it):
+- Conservative mode (use `stable_sextant` instead of raw α): just slows the oscillation, sextant still flips eventually
+- Stricter 2-frame agreement filter: slows response but doesn't break the feedback loop
+- Higher deadband: filters small changes but a full sextant flip is still a huge change
+- Longer motion-pause: just delays the inevitable
+
+**Fix (feed-forward compensation)**: convert the source's azimuth from the array's rotating frame to the **room's fixed frame** before computing the target:
+
+```c
+float alpha_room = doa->azimuth_deg + servo_get_angle_deg();
+float target = alpha_room - 180.0f + s_cfg.home_deg;
+```
+
+Mathematically, `α_array` shifts by exactly `-β_servo` when the array rotates by `+β_servo`. So `α_room = α_array + β_servo` is invariant to servo position. The tracker's target becomes invariant too, and the feedback loop is broken at the algebra level.
+
+This unlocked aggressive parameters (`target_agreement_deg` 10°→5°, `motion-pause` 750ms→500ms) that were previously unstable. Final result: **8.7s response, zero rebound** (was 30s response with strict params pre-feed-forward, or 0.3s response with aggressive params but severe oscillation pre-feed-forward).
+
+**Required condition**: `servo_get_angle_deg()` must return the **actual commanded angle**, not a stale or measured value. We have this (it's just the last commanded value from `servo_set_angle_deg()`). If you ever add servo position feedback (e.g., read servo potentiometer), use that instead.
+
+**References** — closed-loop SSL (Sound Source Localization) with moving arrays is a known research area. The feed-forward trick is standard robotics (convert local frame → world frame using known pose). Useful papers:
+- [Closed-loop SSL in neuromorphic systems](https://research.rug.nl/en/publications/closed-loop-sound-source-localization-in-neuromorphic-systems)
+- [Modified 3D Kalman (M3K) tracking](https://www.researchgate.net/publication/325975958) — statistical version of the same idea, handles measurement noise better but needs ~100 LoC and parameter tuning
+
+### 7. Servo direction sign — empirical, not derivable
+
+For shaft-down servo installation with internal-mesh ring gear, the relationship between commanded sign and physical rotation direction is NOT derivable from theory (gear conventions cancel partially but not fully). Just test: command `+20°`, observe whether M3 moves CW or CCW from above, flip `SERVO_SHAFT_INSTALLED_DOWN` if wrong.
+
+For this build: `SERVO_SHAFT_INSTALLED_DOWN=1` is correct (positive command = CW rotation viewed from above = M3 toward 7oc from 6oc home).
 
 ## Reference projects (sibling directories)
 

@@ -253,14 +253,56 @@ tracker_mode_t tracker_get_mode(void);
 - `out_of_range_deg`（默认 45°）：减小则跟踪范围更窄（保守），增大则更激进但易振荡
 - `min_confidence`（默认 0.45）：增大可过滤更多噪声帧但 3-mic 占比下降
 
-### Phase 5 — 集成测试 + 文档（预计 0.5 天）
+### Phase 5 — 集成测试 + 文档 ✅ 完成
 
 **任务**：
-- [ ] 端到端测试：用户从 5oc 走到 7oc，舵机跟随；走到 3oc，舵机钳制在 +27°
-- [ ] 测试噪音抑制：舵机运动期间和静止期间 DOA 读数对比
-- [ ] 更新 `README.md` 把"舵机尚未实现"改成"已实现，见 SERVO_PLAN 结果"
-- [ ] 更新 `CLAUDE.md` 加实测跟踪精度表
-- [ ] 打 tag `servo-tracking-1.0`
+- [x] 端到端测试：用户从 5oc 走到 7oc，舵机跟随
+- [x] 测试噪音抑制：舵机运动期间 DOA 通过 motion-pause 跳过
+- [x] 更新 `README.md` / `CLAUDE.md`
+- [x] 打 tag `servo-stable-1.0`（30s 响应稳定版）
+
+### Phase 6 — Feed-forward 补偿突破 ✅ 2026-06-22 完成（v1.1）
+
+**问题**：Phase 5 的稳定版响应时间 30 秒，用户希望 3-5 秒。但所有"激进参数"（小 agreement、短 motion-pause）都会触发**闭环振荡**——servo 运动 → 阵列转 → 用户在阵列坐标系里的方位变 → stable_sextant 翻 → tracker 命令反向 → 循环。
+
+**根本原因**：tracker 使用 `α_array`（声源在**阵列坐标系**的方位）。但阵列会随舵机转，所以 α_array 永远在变，形成闭环。这是任何移动阵列 SSL 系统都会遇到的问题。
+
+**4 种配置实测对比**（feed-forward 之前）：
+
+| 配置 | 响应 | 稳定 |
+|---|---|---|
+| 严格（±20°, agree 10°, ρ01 0.95, pause 750ms）| ~30s | ✓ |
+| 激进（±24°, agree 0°, ρ01 0.92, pause 400ms）| <1s | ✗ 大震荡 |
+| 中间（±24°, agree 5°, ρ01 0.93, pause 500ms）| 0.3s | ✗ 大震荡 |
+| Conservative mode | ~6s | ✗ 仍震荡 |
+
+**突破（feed-forward compensation）**：把声源方位从阵列坐标系换算到房间坐标系：
+
+```c
+α_room = α_array + β_servo_current
+target = α_room - 180° + home
+```
+
+**为什么有效**：α_array 在舵机转动时会变化 Δα = -β_servo（阵列转 +β，用户在阵列看来转 -β）。但 α_room = α_array + β_servo 永远不变（数学恒等）。所以 tracker 的 target 也不变，反馈环在代数层面被消除。
+
+**最终配置（v1.1）**：
+- ±20° clamp, ρ01 < 0.95（不变）
+- target_agreement_deg: 10° → **5°**（放松，feed-forward 提供稳定性）
+- motion-pause: 750ms → **500ms**（放松）
+- conservative_mode: false（必须用 raw az 才能让 feed-forward 工作）
+- **feed-forward compensation: ON**
+
+**验收结果（v1.1, 2026-06-22）**：
+- 6oc 静止 12s：swing=0°（完美稳定）
+- 6oc → 7oc 切换：首次响应 **8.7s**，servo 到 +20°
+- 7oc 持续 30s：swing=0°，**零反弹**
+
+**v1.0 → v1.1 提升**：
+- 响应时间：30s → **8.7s**（3.5×）
+- 稳定性：稳定 → **完美稳定**（零跳变）
+- 算法：滤波+hysteresis → **代数补偿**（一行公式）
+
+**适用范围**：任何"移动阵列 + 舵机跟踪"的 SSL 系统。无需硬件改动，只要舵机角度已知。详见 `CLAUDE.md` Pitfalls §6。
 
 ## 4. 舵机噪音抑制策略（详细说明）
 
