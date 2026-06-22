@@ -8,6 +8,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Servo driver on GPIO38 is **not yet implemented** — direction output is UART only.
 
+## Servo hardware (planned, not yet implemented)
+
+| Component | Spec |
+|---|---|
+| Servo model | JS6620 (standard 180° hobby PWM servo) |
+| PWM signal | GPIO38, LEDC 50 Hz, pulse 500–2500 µs |
+| Servo shaft orientation | Points **down** (away from mic array) |
+| Drive gear (on servo shaft) | 15 teeth, external |
+| Driven gear (disc) | 50 teeth, **internal** (teeth face inward) — ring gear |
+| Gear mesh style | Pinion runs inside ring (internal mesh, same rotation direction) |
+| Reduction ratio | 50 / 15 = **3.33 : 1** (servo rotates 3.33× for disc to rotate 1×) |
+| Disc coverage for 180° servo travel | 180° / 3.33 = **~54°** of arc |
+| Disc mounting position | 12 cm below the mic array, at the 12 o'clock direction |
+
+### Mechanical implications
+
+- The disc (carrying the mic array through its gimbal) can only sweep **~54° of arc** — less than one 60° sextant. Full 360° tracking is mechanically impossible with this gear reduction.
+- Effective pointing range: ±27° about the disc's "home" position.
+- Practical tracking strategy: fix home at the most common source direction (e.g., user's usual seat), servo fine-tunes within ±27°. Sources outside this arc clamp to the nearest limit.
+- Parallax: 12 cm offset between servo and array center is small relative to typical 30–50 cm voice distance — sub-1° angular error, negligible vs the ±15° single-frame DOA noise.
+
+### Servo noise considerations
+
+JS6620 (and similar hobby servos) produce audible whine during motion (typically 200–800 Hz motor drive + broadband gear noise). All 3 mics pick this up, creating a consistent "phantom source" at the servo's direction that corrupts GCC-PHAT. Mitigation strategy (in `SERVO_PLAN.md`):
+
+1. **Motion pause** (primary): freeze DOA updates while servo is moving + 200 ms settling window.
+2. **Spectral masking** (secondary): optional high-pass or band-stop filter on mic PCM before GCC-PHAT to suppress the 200–800 Hz servo band. Voice energy in this band is also removed, but SNR improves when servo is holding.
+
+See `SERVO_PLAN.md` for the full development plan.
+
 ## Project goal
 
 Implement **360° six-direction sound source localization** on a GOOUUU ESP32-S3-CAM board using the 3DMIC-291 three-microphone MEMS array. The user cannot solder, so all mic-array channel selection is done in software (I²S PDM L/R channel selection, GPIO matrix clock fan-out) rather than by re-wiring the board. The localization result is reported over UART as a clock-face direction (e.g. "声源位于 6 点方向").
@@ -185,6 +215,6 @@ clangd will report `'sys/features.h' file not found` and unused-include warnings
 
 ## Implementation direction still open
 
-1. **Servo driver on GPIO38** — `stable_sextant` should drive a hobby servo to point at the detected direction. Borrow `servo_init()`/`servo_set_bin()` from `ESP32_S3_CAM_MIC3/main/hw_validate.c`. Mechanical coverage of a standard 180° servo with a 50/15 gear reduction is ~54°, less than one sextant — physical pointing only makes sense if the user mounts the servo differently or accepts coarse positioning.
+1. **Servo driver on GPIO38** — `stable_sextant` should drive the JS6620 servo through the 15T/50T gear reduction to point the mic array's 6 o'clock direction at the sound source. Hardware setup is documented above; development plan is in `SERVO_PLAN.md`. Mechanical coverage is limited to ~54° of arc, so the system can only track sources within a ±27° window about its home position.
 2. **Voice-activity detection gate** — currently the algorithm tries to localize every frame; adding a simple energy gate (skip if `AC_RMS < 30 LSB` on all channels) would suppress more noise frames and free CPU.
 3. **PSRAM not used** — all buffers are internal SRAM (`s_dma`, FFT scratch, lag history). If window size or FFT order is increased, move them to PSRAM (board has 8 MB octal PSRAM).

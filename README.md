@@ -18,7 +18,7 @@
 
 单帧方位噪声约 ±15°，`stable_sextant`（3 帧滞后）锁定后不抖。
 
-舵机驱动（GPIO38）尚未实现，方向输出仅 UART。
+舵机驱动（GPIO38 + JS6620 + 15T/50T 内齿圆盘减速）**尚未实现**——开发计划见 `SERVO_PLAN.md`。机械覆盖仅 ~54°（齿轮减速比 3.33:1），只能做 ±27° 微调跟踪。方向输出目前仅 UART。
 
 ## 关键发现
 
@@ -36,6 +36,7 @@ C3 和 S3_CAM_MIC3 两个同类项目都把 DAT0 上 L/R 时隙的"折叠"当成
 | DAT0 | GPIO 2 | I²S PDM RX DIN[0] — M2 (L slot) + M1 (R slot) |
 | CLK1 | GPIO 14 | GPIO 矩阵扇出的同一 I²S CLK 副本 |
 | DAT1 | GPIO 42 | I²S PDM RX DIN[1] — M3 |
+| JS6620 舵机 PWM | GPIO 38 | LEDC 50 Hz PWM（计划中，详见 `SERVO_PLAN.md`）|
 
 > ⚠️ S3 的 I²S PDM RX 外设只暴露一个 CLK 输出。CLK1 必须通过 GPIO 矩阵把 I²S0 RX WS 信号（`I2S0I_WS_OUT_IDX`）复制到 GPIO14，否则两颗时钟各自漂移，DOA 失效。实现见 `main/mic_capture.c`。
 
@@ -153,8 +154,9 @@ cos α = (lag_01 − 2·lag_02) / (K·√3)
 
 ## 进一步阅读
 
-- **`CLAUDE.md`** — 给 AI 协作者的完整项目文档。包括所有踩过的坑（4 个）、几何方程推导、标定步骤、参考项目对比。
+- **`CLAUDE.md`** — 给 AI 协作者的完整项目文档。包括所有踩过的坑（4 个）、几何方程推导、标定步骤、舵机硬件规格、参考项目对比。
 - **`TECH_NOTE_for_S3_CAM_MIC3.md`** — 写给同类项目 S3_CAM_MIC3 的移植建议（GPIO 接线、算法补丁、校准步骤）。
+- **`SERVO_PLAN.md`** — 舵机声源跟踪的开发计划（硬件约束、软件架构、噪音抑制策略、分阶段实施）。
 
 ## 相关项目
 
