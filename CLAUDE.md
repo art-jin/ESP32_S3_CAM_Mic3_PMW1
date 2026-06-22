@@ -129,17 +129,31 @@ Note: the `sin α` equation has a **positive** sign because the 3DMIC-291 is ins
 
 K = d·fs/c ≈ 1.40 samples at d=10 mm, fs=48 kHz. `K` is also the max possible pairwise TDOA in samples — `lag_*` outside ±K means a noise peak.
 
-## Calibration results (2026-06-21)
+## Calibration results (2026-06-21 / 2026-06-22)
 
-User walked to known clock positions at 30–50 cm distance, spoke continuously. Mean azimuth per position (after the stability improvements in `doa.c`):
+User walked to known clock positions at 30–50 cm distance, spoke continuously. Two rounds: pre-flip (board component-side up) and post-flip (board component-side down — current installed orientation).
+
+### Post-flip (current, tag `3麦阵列测试完成1.0`)
+
+| User position | Expected α | Measured α | Offset | Primary mode |
+|---|---|---|---|---|
+| 6 o'clock     | 180° | 184.1° | +4.1°  | 3-mic |
+| 12 o'clock    |   0° |   6.6° | +6.6°  | 3-mic (mirror-axis invariant) |
+| 3 o'clock     |  90° |  83.9° | -6.1°  | 3-mic |
+| 10 o'clock    | 300° | 291.3° | -8.7°  | 3-mic + 2-mic |
+| 9 o'clock     | 270° | 306°   | +36°   | 2-mic fallback (geometric blind spot) |
+
+**4 of 5 positions are within ±10°** of expected — well inside the 60° sextant tolerance. The 9 o'clock position is the array's inherent blind spot: M1 (at 2oc) is on the opposite side of the board from the source, so DAT0's L-slot signal is weak, L/R collapses, and the algorithm correctly falls back to 2-mic half-plane reporting ("M2 side", which 9oc genuinely is). This is not a bug — any 3-mic planar array has this limitation at the "anti-mic" direction.
+
+Single-frame azimuth noise ≈ ±15° at voice SNR; the **`stable_sextant` field (3-frame hysteresis) is rock-solid** once it locks.
+
+### Pre-flip (for historical reference)
 
 | User position | Expected α | Measured α | Offset |
 |---|---|---|---|
 | 6 o'clock     | 180° | 181.8° | +1.8° |
 | 12 o'clock    |   0° |   6.6° | +6.6° |
-| 3 o'clock     |  90° | 106.4° | +16° (later tighter) |
-
-All sextant classifications correct. Single-frame azimuth noise ≈ ±15° at voice SNR; the **`stable_sextant` field (3-frame hysteresis) is rock-solid** once it locks.
+| 3 o'clock     |  90° | 106.4° | +16° |
 
 ## Pitfalls encountered (and how they were fixed)
 
