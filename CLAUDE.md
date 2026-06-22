@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Working (v1.2).** 360° six-direction sound source localization + servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
+**Working (v1.3).** 360° six-direction sound source localization + servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
 
 - DOA: 6-position calibration, mean azimuth offset **< ±5°** at 30–50 cm voice distance.
-- Servo tracking: **±33° mechanical range** (270° JS6620 servo, 3.33:1 gear reduction), **0.5–3.9s response time**, **perfectly stable (zero rebound)** thanks to feed-forward compensation. See "Pitfalls §6" for the breakthrough.
+- Servo tracking: **±33° range** (270° JS6620, 3.33:1 gear), **0.5–3.9s response**, **zero rebound** (feed-forward compensation).
+- Speech sensitivity: front-end pre-emphasis (`y = x - 0.97·x[i-1]`) enables **16% 3-mic frames at normal speaking volume** (was 0% without it). See Pitfalls §8.
 - Direction output: UART log + physical servo pointing.
 
-Tagged `v1.2`. Earlier tags: `v1.1` (pre-270°-correction), `servo-stable-1.0` (strict stable, pre-feed-forward), `servo-tracking-1.0` (Phase 1-3 done), `3麦阵列测试完成1.0` (DOA only).
+Tagged `v1.3`. History: `v1.2` (270° servo slope fix), `v1.1` (feed-forward), `servo-stable-1.0` (strict stable), `servo-tracking-1.0` (Phase 1-3), `3麦阵列测试完成1.0` (DOA only).
 
 ## Servo hardware (Phase 1-3 implemented, 2026-06-22)
 
@@ -270,6 +271,19 @@ This unlocked aggressive parameters (`target_agreement_deg` 10°→5°, `motion-
 For shaft-down servo installation with internal-mesh ring gear, the relationship between commanded sign and physical rotation direction is NOT derivable from theory (gear conventions cancel partially but not fully). Just test: command `+20°`, observe whether M3 moves CW or CCW from above, flip `SERVO_SHAFT_INSTALLED_DOWN` if wrong.
 
 For this build: `SERVO_SHAFT_INSTALLED_DOWN=1` is correct (positive command = CW rotation viewed from above = M3 toward 7oc from 6oc home).
+
+### 8. Speech sensitivity requires pre-emphasis at the FRONT END
+
+MEMS mic arrays with small spacing (10 mm) are naturally more sensitive to whistling (pure high-frequency tone) than to speech (energy concentrated at 80-200 Hz fundamental). The root cause: at 10 mm spacing, only frequencies above ~1 kHz produce meaningful inter-mic phase differences. Speech fundamentals (80-200 Hz, wavelength 1.7-4.3 m) produce negligible TDOA.
+
+The fix is a **first-order pre-emphasis filter** (`y[i] = x[i] - 0.97·x[i-1]`) applied at the **earliest point** in the audio path — right after deinterleaving, BEFORE both the L/R correlation check AND GCC-PHAT. This is critical:
+
+- Pre-emphasis **inside GCC-PHAT only** (earlier attempt): ρ01 still computed on raw PCM → ρ01 > 0.95 for speech → L/R collapse → 0% 3-mic frames. Did NOT fix the problem.
+- Pre-emphasis **at the front end** (final fix): ρ01 drops from >0.95 to ~0.80 for speech → 3-mic mode triggers → 16% 3-mic frames at normal speaking volume. Whistling unaffected (already high-frequency).
+
+Measured at 7oc, normal speech volume (AC RMS 30-70 LSB):
+- Before pre-emphasis: 0% 3-mic, ρ01 > 0.95, servo never moves
+- After front-end pre-emphasis: 16% 3-mic, ρ01 ≈ 0.80, servo tracks to +33°
 
 ## Reference projects (sibling directories)
 
