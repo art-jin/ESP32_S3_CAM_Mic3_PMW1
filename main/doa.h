@@ -6,39 +6,43 @@
 /* GCC-PHAT direction-of-arrival for the 3DMIC-291 3-mic array.
  *
  * Geometry (equilateral triangle, side d = 10 mm, centred at origin).
- * Clock-face positions from ArthurReadMe.md:
  *
- *     M1 (10 o'clock)    12 o'clock (north, α=0°)
+ * The 3DMIC-291 PCB is installed **component-side down, sound holes up**
+ * (flipped relative to the silkscreen's intended orientation). This mirrors
+ * the layout across the 12oc-6oc axis: M1 and M2 swap clock positions
+ * compared to the silkscreen, M3 stays at 6oc.
+ *
+ *     M2 (c0) @ 10oc        12oc (north, α=0°)
  *          ●
  *         /   \                  ↗ 0°
  *        /     \              ↑
  *       /       \             |
  *      ●─────────●            +────→ east
- *   M3 (6 o'clock)  M2 (2 o'clock)
+ *   M3 (c2) @ 6oc    M1 (c1) @ 2oc
  *
- * Channel → physical mic mapping (empirically verified by per-mic tap test
- * on 2026-06-21: c0 responds to M2 tap, c1 responds to M1 tap, c2 = M3):
- *   c0 (DAT0 L-slot) = M2 @ 2oc  → (+d/2,   +d/(2√3))
- *   c1 (DAT0 R-slot) = M1 @ 10oc → (-d/2,   +d/(2√3))
+ * Channel → physical mic mapping (tap-test verified 2026-06-21; the channel
+ * wiring is independent of board orientation, only the positions change):
+ *   c0 (DAT0 L-slot) = M2 @ 10oc → (-d/2,   +d/(2√3))
+ *   c1 (DAT0 R-slot) = M1 @ 2oc  → (+d/2,   +d/(2√3))
  *   c2 (DAT1)        = M3 @ 6oc  → (0,      -d/√3)
  *
  * Pairwise TDOA (gcc_phat(a,b) returns arrival(a) − arrival(b), in samples;
  * K = d·fs/c ≈ 1.40 at 48 kHz):
- *   lag_01 = gcc_phat(c0,c1) = arrival(M2) − arrival(M1) = −K · sin(α)
- *   lag_02 = gcc_phat(c0,c2) = arrival(M2) − arrival(M3) = −K · sin(α + 60°)
- *   lag_12 = gcc_phat(c1,c2) = arrival(M1) − arrival(M3) = +K · sin(α − 60°)
+ *   lag_01 = gcc_phat(c0,c1) = arrival(M2) − arrival(M1) = +K · sin(α)
+ *   lag_02 = gcc_phat(c0,c2) = arrival(M2) − arrival(M3) = +K · sin(α − 60°)
+ *   lag_12 = gcc_phat(c1,c2) = arrival(M1) − arrival(M3) = −K · sin(α + 60°)
  *
  * 3-mic solve:
- *   sin α = −lag_01 / K
+ *   sin α = +lag_01 / K
  *   cos α = (lag_01 − 2 · lag_02) / (K · √3)
  *   α = atan2(sin α, cos α)
  *
  * 2-mic fallback (only c0=M2 + c2=M3 usable, DAT0 L/R collapsed):
- *   lag_02 = −K · sin(α + 60°). Linear baseline M2↔M3, front/back ambiguous.
+ *   lag_02 = +K · sin(α − 60°). Linear baseline M2↔M3, front/back ambiguous.
  *   Half-plane bearing θ ∈ [0°, 180°]:
- *     θ = 0°    source on M2 side       (lag_02 = −K, α ≈ 30°)
- *     θ = 90°   broadside (α ≈ 120° / 300°)  (lag_02 = 0)
- *     θ = 180°  source on M3 side        (lag_02 = +K, α ≈ 210°)
+ *     θ = 0°    source on M2 side       (lag_02 = −K, α ≈ 330° = 10-11oc)
+ *     θ = 90°   broadside                (lag_02 = 0,  α ≈ 60° / 240°)
+ *     θ = 180°  source on M3 side        (lag_02 = +K, α ≈ 150° = 4-5oc)
  *   Quantized to 3 bins of 60° each. */
 
 #define DOA_FS_HZ            48000

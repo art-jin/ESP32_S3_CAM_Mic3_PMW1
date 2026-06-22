@@ -74,24 +74,26 @@ The S3 I²S PDM RX peripheral exposes only one CLK output. CLK1 is a GPIO-matrix
 
 **This mapping is NOT what you'd guess from the README.** Tap each physical mic and watch which of `c0/c1/c2` spikes:
 
-| DMA slot | Channel | Physical mic | Clock position |
+| DMA slot | Channel | Physical mic | Clock position (current install) |
 |---|---|---|---|
-| LINE0_L (`dins[0]` L) | **c0** | **M2** | 2 o'clock |
-| LINE0_R (`dins[0]` R) | **c1** | **M1** | 10 o'clock |
+| LINE0_L (`dins[0]` L) | **c0** | **M2** | 10 o'clock |
+| LINE0_R (`dins[0]` R) | **c1** | **M1** | 2 o'clock |
 | LINE1_L (`dins[1]`)   | **c2** | **M3** | 6 o'clock |
 
 The README suggests "DAT0 = M3 + M2, DAT1 = M1" but in reality DAT0 carries M2 + M1 (c0 + c1) and DAT1 carries M3 (c2). The geometry equations in `main/doa.c` use this corrected mapping.
 
+**Board orientation:** The 3DMIC-291 PCB is installed **component-side down, sound holes up** (flipped relative to the silkscreen's intended orientation). This mirrors the layout across the 12oc-6oc axis: M1 and M2 swap clock positions compared to the silkscreen (M1 silkscreened at 10oc is now physically at 2oc, M2 silkscreened at 2oc is now physically at 10oc). M3 stays at 6oc. The channel-to-mic-label wiring is unchanged — only the physical positions of M1 and M2 swap.
+
 Geometry (equilateral triangle, side d=10 mm, centred at origin):
 
 ```
-    M1 (c1) @ 10oc        12oc (north, α=0°)
+    M2 (c0) @ 10oc        12oc (north, α=0°)
        ●
       /   \                ↗ 0°
      /     \             ↑
     /       \            |
    ●─────────●           +────→ east
- M3 (c2) @ 6oc    M2 (c0) @ 2oc
+ M3 (c2) @ 6oc    M1 (c1) @ 2oc
 ```
 
 ## Code architecture
@@ -110,18 +112,20 @@ Audio path runs in a single `mic` task at `configMAX_PRIORITIES - 2` on an 8 KB 
 ### Pairwise GCC-PHAT (sign convention — see "Pitfalls" below)
 
 ```
-lag_01 = gcc_phat(c0,c1) = arrival(M2) − arrival(M1) = −K·sin(α)
-lag_02 = gcc_phat(c0,c2) = arrival(M2) − arrival(M3) = −K·sin(α+60°)
-lag_12 = gcc_phat(c1,c2) = arrival(M1) − arrival(M3) = +K·sin(α−60°)
+lag_01 = gcc_phat(c0,c1) = arrival(M2) − arrival(M1) = +K·sin(α)
+lag_02 = gcc_phat(c0,c2) = arrival(M2) − arrival(M3) = +K·sin(α−60°)
+lag_12 = gcc_phat(c1,c2) = arrival(M1) − arrival(M3) = −K·sin(α+60°)
 ```
 
 3-mic solve:
 
 ```
-sin α = −lag_01 / K
+sin α = +lag_01 / K
 cos α = (lag_01 − 2·lag_02) / (K·√3)
 α = atan2(sin α, cos α)    →    0..360°
 ```
+
+Note: the `sin α` equation has a **positive** sign because the 3DMIC-291 is installed component-side down, mirroring M1/M2 positions. If the board is reinstalled component-side up, the sign flips back to negative — see "Pitfalls" §1 for the derivation.
 
 K = d·fs/c ≈ 1.40 samples at d=10 mm, fs=48 kHz. `K` is also the max possible pairwise TDOA in samples — `lag_*` outside ±K means a noise peak.
 

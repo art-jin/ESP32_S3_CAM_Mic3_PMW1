@@ -298,14 +298,17 @@ void doa_process(const int16_t *c0, const int16_t *c1, const int16_t *c2,
                           && (peak_02 >= DOA_PEAK_THRESH_3MIC);
 
     if (three_mic_eligible) {
-        /* ---- 3-mic solve (c0=M2, c1=M1, c2=M3) ----
-         *   sin α = -lag_01 / K
+        /* ---- 3-mic solve (c0=M2@10oc, c1=M1@2oc, c2=M3@6oc) ----
+         *   sin α = +lag_01 / K
          *   cos α = (lag_01 - 2·lag_02) / (K · √3)
-         * (Sign convention: gcc_phat(a,b) returns arrival(a) − arrival(b).)
+         * (Sign convention: gcc_phat(a,b) returns arrival(a) − arrival(b).
+         * Geometry is mirrored across the 12oc-6oc axis because the 3DMIC-291
+         * PCB is installed component-side down — M1 and M2 swap clock positions
+         * relative to the silkscreen, M3 stays at 6oc.)
          * For ideal far-field, sin² + cos² ≤ 1. If much greater, the three
          * pairwise measurements are inconsistent (noise / multi-source).
          * Normalize and penalize confidence; reject if wildly off. */
-        float sin_a = -sm_01 / DOA_K;
+        float sin_a = sm_01 / DOA_K;
         float cos_a = (sm_01 - 2.0f * sm_02) / (DOA_K * sqrtf(3.0f));
         float mag2 = sin_a * sin_a + cos_a * cos_a;
         if (mag2 >= 4.0f) {
@@ -327,12 +330,12 @@ void doa_process(const int16_t *c0, const int16_t *c1, const int16_t *c2,
         out->mode        = DOA_MODE_3MIC;
         update_stable_sextant(out);
     } else if (peak_02 >= DOA_PEAK_THRESH_2MIC) {
-        /* ---- 2-mic solve (c0=M2, c2=M3 only) ----
-         * lag_02 = -K · sin(α + 60°). Linear baseline M2↔M3, front/back
+        /* ---- 2-mic solve (c0=M2@10oc, c2=M3@6oc only) ----
+         * lag_02 = +K · sin(α − 60°). Linear baseline M2↔M3, front/back
          * ambiguous. Map lag_02 ∈ [-K, +K] linearly to θ ∈ [0°, 180°]:
-         *   θ = 0°    source on M2 side       (lag_02 = -K, α ≈ 30°)
-         *   θ = 90°   broadside                (lag_02 = 0,  α ≈ 120° / 300°)
-         *   θ = 180°  source on M3 side        (lag_02 = +K, α ≈ 210°) */
+         *   θ = 0°    source on M2 side       (lag_02 = -K, α ≈ 330° = 10-11oc)
+         *   θ = 90°   broadside                (lag_02 = 0,  α ≈ 60° / 240°)
+         *   θ = 180°  source on M3 side        (lag_02 = +K, α ≈ 150° = 4-5oc) */
         float ratio = sm_02 / DOA_K;
         if (ratio >  1.0f) ratio =  1.0f;
         if (ratio < -1.0f) ratio = -1.0f;

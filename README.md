@@ -38,14 +38,16 @@ C3 和 S3_CAM_MIC3 两个同类项目都把 DAT0 上 L/R 时隙的"折叠"当成
 麦克风几何（等边三角形，边长 10 mm，以板心为原点）：
 
 ```
-    M1 (c1) @ 10oc        12oc (north, α=0°)
+    M2 (c0) @ 10oc        12oc (north, α=0°)
        ●
       /   \                ↗ 0°
      /     \             ↑
     /       \            |
    ●─────────●           +────→ east
- M3 (c2) @ 6oc    M2 (c0) @ 2oc
+ M3 (c2) @ 6oc    M1 (c1) @ 2oc
 ```
+
+> **板子方向**：3DMIC-291 PCB **翻面安装**（芯片朝下，集音孔朝上）。这把布局沿 12oc-6oc 轴镜像：丝印上的 M1（10oc）现在物理位置在 2oc，丝印上的 M2（2oc）现在在 10oc，M3 不动。如果你把板子装成芯片朝上，需要把 `doa.c` 里 `sin_a = sm_01 / DOA_K` 改回负号。
 
 > 通道到物理麦的映射是 tap test 实测得出的（2026-06-21），不是按 README 猜的。如果你想移植到别的板子，**务必重做 tap test**——参见 `CLAUDE.md` 的校准章节。
 
@@ -122,15 +124,15 @@ main/
 **Pairwise GCC-PHAT**（符号约定见 CLAUDE.md 的 pitfalls，坑过一次）：
 
 ```
-lag_01 = gcc_phat(c0,c1) = arrival(M2) − arrival(M1) = −K·sin(α)
-lag_02 = gcc_phat(c0,c2) = arrival(M2) − arrival(M3) = −K·sin(α+60°)
-lag_12 = gcc_phat(c1,c2) = arrival(M1) − arrival(M3) = +K·sin(α−60°)
+lag_01 = gcc_phat(c0,c1) = arrival(M2) − arrival(M1) = +K·sin(α)
+lag_02 = gcc_phat(c0,c2) = arrival(M2) − arrival(M3) = +K·sin(α−60°)
+lag_12 = gcc_phat(c1,c2) = arrival(M1) − arrival(M3) = −K·sin(α+60°)
 ```
 
 **3-mic 几何求解**：
 
 ```
-sin α = −lag_01 / K
+sin α = +lag_01 / K              # 正号——因为板子翻面安装，M1/M2 位置镜像
 cos α = (lag_01 − 2·lag_02) / (K·√3)
 α = atan2(sin α, cos α)  →  0..360°
 ```
