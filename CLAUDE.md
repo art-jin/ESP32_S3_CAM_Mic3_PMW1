@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Working (v1.2).** 360° six-direction sound source localization + servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
 
 - DOA: 6-position calibration, mean azimuth offset **< ±5°** at 30–50 cm voice distance.
-- Servo tracking: **±30° mechanical range** (270° JS6620 servo, 3.33:1 gear reduction), **0.5–3.9s response time**, **perfectly stable (zero rebound)** thanks to feed-forward compensation. See "Pitfalls §6" for the breakthrough.
+- Servo tracking: **±33° mechanical range** (270° JS6620 servo, 3.33:1 gear reduction), **0.5–3.9s response time**, **perfectly stable (zero rebound)** thanks to feed-forward compensation. See "Pitfalls §6" for the breakthrough.
 - Direction output: UART log + physical servo pointing.
 
 Tagged `v1.2`. Earlier tags: `v1.1` (pre-270°-correction), `servo-stable-1.0` (strict stable, pre-feed-forward), `servo-tracking-1.0` (Phase 1-3 done), `3麦阵列测试完成1.0` (DOA only).
@@ -25,7 +25,7 @@ Tagged `v1.2`. Earlier tags: `v1.1` (pre-270°-correction), `servo-stable-1.0` (
 | Reduction ratio | 50 / 15 = **3.33 : 1** (servo rotates 3.33× for disc to rotate 1×) |
 | Disc coverage for 270° servo travel | 270° / 3.33 = **~81°** of arc |
 | Mechanical limit at disc | **±40.5°** |
-| Soft clamp | **±30°** (safety margin below ±40.5° mechanical limit) |
+| Soft clamp | **±33°** (7.5° safety margin below ±40.5° mechanical limit) |
 | Disc mounting position | 12 cm below the mic array, at the 12 o'clock direction |
 
 ### Performance (v1.2, 270° servo slope + feed-forward)
