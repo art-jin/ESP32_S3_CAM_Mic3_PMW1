@@ -159,23 +159,21 @@ tracker_mode_t tracker_get_mode(void);
 
 每阶段独立交付，可单独测试和回滚。
 
-### Phase 1 — 舵机驱动（预计 0.5 天）
+### Phase 1 — 舵机驱动（预计 0.5 天） ✅ 2026-06-22 完成
 
 **目标**：`servo_set_angle_deg(0)` 让舵机回 home；`servo_set_angle_deg(+20)` 转到 +20°；钳位 ±27° 正确。
 
 **任务**：
-- [ ] 创建 `main/servo.{c,h}`
-- [ ] LEDC 定时器配置：`LEDC_TIMER_1`（避开 `LEDC_TIMER_0`，预留给未来可能的摄像头 XCLK）、`LEDC_LOW_SPEED_MODE`、14-bit duty
-- [ ] LEDC 通道配置：`LEDC_CHANNEL_1`、GPIO 38
-- [ ] `servo_set_pulse_us(us)` 实现（脉宽 µs → duty 比例）
-- [ ] `servo_set_angle_deg(angle)` 实现：`pulse = 1500 + (angle / 27.0) * 1000`（home=1500, +27°=2500, -27°=500）
-- [ ] `servo_is_moving()` 占位返回 `false`（运动检测放到 Phase 3）
-- [ ] 在 `main.c::app_main` 加 `servo_init()` 调用
-- [ ] 在 UART 命令解析里加 `servo <angle>` 测试命令（可选，调试用）
+- [x] 创建 `main/servo.{c,h}`
+- [x] LEDC 定时器配置：`LEDC_TIMER_1`（避开 `LEDC_TIMER_0`，预留给未来可能的摄像头 XCLK）、`LEDC_LOW_SPEED_MODE`、14-bit duty
+- [x] LEDC 通道配置：`LEDC_CHANNEL_1`、GPIO 38
+- [x] `servo_set_pulse_us(us)` 实现（脉宽 µs → duty 比例）
+- [x] `servo_set_angle_deg(angle)` 实现：`pulse = 1500 + (angle / 27.0) * 1000`（home=1500, +27°=2500, -27°=500）
+- [x] `servo_is_moving()` 实现（基于 `esp_timer_get_time()` 距上次命令的时差，holdoff 750 ms）
+- [x] 在 `main.c::app_main` 加 `servo_init()` 调用
+- [x] 启动自检 sweep task（13 步 × 1s，覆盖 ±27° 全范围）替代 UART 命令测试
 
-**测试方法**：烧固件，板子启动后舵机回 home。手动通过 UART 输入 `servo +10`、`servo -20` 等命令，看舵机是否正确转动。用尺子量转盘角度验证 ±27° 行程。
-
-**模板**：直接借用 `ESP32_S3_CAM_MIC3/main/hw_validate.c` 的 `servo_init()` / `servo_set_pulse_us()` 实现。常量已经一致（SERVO_GPIO=38, 50Hz, 500-2500µs）。
+**验收结果（2026-06-22）**：用户启动板子后观察到舵机完成完整 sweep 序列（0° → +27° → 0° → -27° → 0°，~13 秒），每个位置都能稳定保持。UART 日志里 `servo=+0.0°` 字段在 self-test 完成后稳定显示。Phase 1 通过。
 
 ### Phase 2 — 跟踪策略骨架（预计 0.5 天）
 
