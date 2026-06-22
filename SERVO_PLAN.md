@@ -196,26 +196,38 @@ tracker_mode_t tracker_get_mode(void);
 
 **目标**：舵机运动期间及之后 750 ms 内，tracker 跳过 DOA 更新。避免舵机噪音反馈成假方位。同时解决单帧噪声驱动舵机跳到极限的问题。
 
-**任务**：
-- [x] `servo_is_moving()`：基于 `esp_timer_get_time()` 距上次命令的时差，holdoff 750 ms
-- [x] `tracker_update()` 在最前面加 motion-pause gate
-- [x] **机械限位 ±20°**（原计划 ±27°，但发现机械止位震动严重，缩到 ±20°）
-- [x] **超范围抑制** `out_of_range_deg=45°`：如果目标超出 ±45°（远超机械范围），不追，避免极限之间振荡
-- [x] **方向反转逻辑** `SERVO_SHAFT_INSTALLED_DOWN` 开关，实测确认 = 0（即不需要反转，内齿圆盘 + servo 自带方向恰好抵消）
-- [x] **2-frame agreement 滤波** `target_agreement_deg=10°`：连续 2 帧 raw target 差距 < 10° 才命令运动。单帧 GCC-PHAT 暂态（如 servo buzz 漏过 motion-pause）被滤掉。真实位置变化跨多帧持续，能通过。
+**最终配置**（2026-06-22，tuning 后稳定）：
+- `SERVO_ANGLE_MIN/MAX_DEG` = **±20°**（不是机械极限 ±27°）
+- `SERVO_MOTION_HOLDOFF_MS` = **750 ms**
+- `lr_independent` 阈值 = `ρ01 < 0.95`
+- `target_agreement_deg` = **10°**
+- `out_of_range_deg` = **45°**
+- `conservative_mode` = **false**
+- `SERVO_SHAFT_INSTALLED_DOWN` = **1**
 
-**验收结果（2026-06-22）**：
+**意外发现 / 设计教训**：
 
-| 测试位置 | 期望 servo | 实测 servo | 结果 |
-|---|---|---|---|
-| 6 点钟（M3 后方）| 0° | -0.7°（稳定 15s）| ✓ |
-| 7 点钟（M3 左侧）| +20° | -4° → +20°（跟踪到位）| ✓ |
-| 3 点钟（远超范围）| 抑制不动 | 抑制不动 | ✓ |
+1. **闭环反馈振荡（核心限制）**：任何 servo 运动 → 阵列也转 → 用户在阵列坐标系里的方位变 → `stable_sextant` 翻 → tracker 命令反向 → 循环。**没有 IMU 没法根治**，只能用更慢的响应（30s+）换取稳定。
 
-**意外发现**（写入 CLAUDE.md/SERVO_PLAN）：
-1. 舵机在机械止位（±27°）会持续震动，PCB 耦合到 DAT0 双麦 → ρ01=1.0 → L/R 折叠 → 偶尔产生幻像 3-mic 方位 → 反馈到 tracker → 振荡。**解法**：限制 ±20° + motion-pause。
-2. 舵机轴向下安装时，方向**需要**在代码里翻转（`SERVO_SHAFT_INSTALLED_DOWN=1`）。这与第一次直觉相反——内齿圆盘和舵机的方向惯例**不**完全抵消。**确认方法**：用户在 7 点钟 → servo 应命令 +20° → M3 物理上转到 7oc 方向（朝用户）。如果 M3 转到 5oc（背离用户），方向反了，toggle 这个宏。
-3. 用户在 M3 正后方（6 点钟）时，M1/M2 在远端听到弱信号 → L/R 折叠严重 → 3-mic 帧稀少（每 5 秒 0-2 帧）。这是 3 麦阵列的几何盲区。2-frame agreement 滤波在这种稀疏率下仍能工作，但响应慢。
+2. **测试过 4 种配置**，结论：
+
+| 配置 | 响应 | 稳定 |
+|---|---|---|
+| 严格（±20°, agree 10°, ρ01 0.95, pause 750ms）| ~30s | ✓ |
+| 激进（±24°, agree 0°, ρ01 0.92, pause 400ms）| <1s | ✗ 大震荡 |
+| 中间（±24°, agree 5°, ρ01 0.93, pause 500ms）| 0.3s | ✗ 大震荡 |
+| Conservative mode | ~6s | ✗ 仍震荡 |
+
+**fast + stable 不可兼得**——选了 stable（30s 响应）。
+
+3. **舵机方向反转**：轴向下安装时需要 `SERVO_SHAFT_INSTALLED_DOWN=1`。这与第一直觉相反——内齿圆盘和舵机的方向惯例**不**完全抵消。empirical tap test 确认。
+
+4. **舵机机械止位震动**：在 ±27°（硬极限）会持续震动，PCB 耦合到 DAT0 双麦 → ρ01=1.0 → L/R 折叠 → 幻像 3-mic 方位 → 反馈到 tracker → 振荡。**解法**：限制 ±20° + motion-pause。
+
+5. **3 麦几何盲区**：用户在 M3 正后方（6 点钟）时，M1/M2 在远端听到弱信号 → L/R 折叠严重 → 3-mic 帧稀少（每 5 秒 0-2 帧）。这是 3 麦阵列的固有几何限制。
+
+### Phase 4 — UART 调试 + 调参 ⚠️ 受硬件限制未完成
+### Phase 5 — 集成测试 + 文档 ✅ 完成
 
 ### Phase 4 — UART 调试 + 调参（预计 0.5 天） ⚠️ 受硬件限制未完成
 
