@@ -62,7 +62,7 @@ typedef struct {
     .min_confidence       = 0.45f,   \
     .conservative_mode    = false,   \
     .out_of_range_deg     = 45.0f,   \
-    .target_agreement_deg = 10.0f,   \
+    .target_agreement_deg = 5.0f,    \
 }
 
 void tracker_init(const tracker_config_t *cfg);

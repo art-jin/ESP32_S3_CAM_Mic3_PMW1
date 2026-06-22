@@ -75,5 +75,5 @@ float servo_get_angle_deg(void);
  * freeze DOA updates during motion + settle, so servo-motor whine doesn't
  * corrupt GCC-PHAT. Phase 1 implementation just returns false if no
  * command has been issued since boot. */
-#define SERVO_MOTION_HOLDOFF_MS  750
+#define SERVO_MOTION_HOLDOFF_MS  500
 bool servo_is_moving(void);

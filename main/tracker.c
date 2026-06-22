@@ -60,18 +60,31 @@ void tracker_update(const doa_result_t *doa)
         return;
     }
 
-    /* Compute target: rotate the array so its 6oc (α=180°, M3) faces
-     * the source. If source is at α, we rotate the array by (α - 180°).
-     * Positive = clockwise viewed from above. */
+    /* FEED-FORWARD COMPENSATION: convert source azimuth from array frame
+     * to room frame by adding the current servo angle. Without this, any
+     * servo motion changes the array's orientation, which shifts the
+     * source's perceived azimuth, which flips stable_sextant, which
+     * commands the servo back — closed-loop oscillation. With this,
+     * α_room is invariant to servo position (mathematically), so target
+     * is stable across servo motions.
+     *
+     *   α_room = α_array + β_servo
+     *   target = α_room - 180° + home
+     *
+     * α_array ∈ [0, 360), β_servo ∈ [-20, +20], so α_room ∈ [-20, 380).
+     * target = α_room - 180 ∈ [-200, 200]. Clamp ±20° takes care of it.
+     * The math doesn't need explicit wraparound handling because the
+     * clamp rejects anything far from 0 anyway. */
+    float alpha_room = doa->azimuth_deg + servo_get_angle_deg();
     float target;
     if (s_cfg.conservative_mode && doa->stable_sextant >= 0) {
-        /* Map stable_sextant (0..5, each = 60°) to the sextant center's
-         * azimuth. Only re-commands when sextant changes — very stable
-         * but no within-sextant resolution. */
-        int sextant_center_az = doa->stable_sextant * 60;  /* 0,60,120,...,300 */
-        target = (float)sextant_center_az - 180.0f + s_cfg.home_deg;
+        int sextant_center_az = doa->stable_sextant * 60;
+        /* Apply feed-forward here too — add current servo angle to the
+         * sextant center, then subtract 180. */
+        target = (float)sextant_center_az + servo_get_angle_deg()
+               - 180.0f + s_cfg.home_deg;
     } else {
-        target = doa->azimuth_deg - 180.0f + s_cfg.home_deg;
+        target = alpha_room - 180.0f + s_cfg.home_deg;
     }
 
     /* OUT-OF-RANGE SUPPRESSION: if the unclamped target is far outside
