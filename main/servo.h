@@ -36,12 +36,11 @@
 
 /* Mechanical limits at the ring gear (clamp range).
  * True mechanical limit is ±40.5° (270° servo travel / 3.33 reduction).
- * Clamped to ±30° — leaves a safety margin below the mechanical limit
- * and stays well within the feed-forward tracker's stable region.
- * The earlier ±20° limit was based on the wrong 180° servo assumption
- * and was unnecessarily conservative. */
-#define SERVO_ANGLE_MIN_DEG    (-30.0f)
-#define SERVO_ANGLE_MAX_DEG    (+30.0f)
+ * Clamped to ±33° — leaves a 7.5° safety margin below the mechanical
+ * limit, stays well within the feed-forward tracker's stable region.
+ * Tuned 2026-06-22 to maximize usable arc while keeping margin. */
+#define SERVO_ANGLE_MIN_DEG    (-33.0f)
+#define SERVO_ANGLE_MAX_DEG    (+33.0f)
 
 /* Servo shaft orientation switch.
  *
