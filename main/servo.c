@@ -80,13 +80,19 @@ void servo_set_angle_deg(float angle_deg)
     if (angle_deg < SERVO_ANGLE_MIN_DEG) angle_deg = SERVO_ANGLE_MIN_DEG;
     s_target_angle_deg = angle_deg;
 
-    /* Linear map: angle [-27°, +27°] → pulse [500, 2500] µs.
-     * slope = (2500-500) / (27-(-27)) = 2000/54 = 37.04 µs/deg.
+    /* Linear map: angle at disc [-40.5°, +40.5°] → pulse [500, 2500] µs.
+     * Math: 270° servo / 3.33 gear reduction = 81° disc travel.
+     * slope = 2000 µs / 81° = 24.69 µs per disc-degree.
+     *
+     * (Earlier code assumed 180° servo, slope = 37.04 µs/deg — that was
+     * wrong; the servo is actually 270° per spec. The error meant our
+     * "±20°" command was actually only ±13.3° at the disc, leaving most
+     * of the servo range unused.)
      *
      * Sign depends on shaft orientation — see SERVO_SHAFT_INSTALLED_DOWN
      * in servo.h. With shaft-down, we negate so that positive angle still
      * means "CW viewed from above" (which is what tracker/geometry use). */
-    float slope_us_per_deg = 2000.0f / 54.0f;
+    float slope_us_per_deg = 2000.0f / 81.0f;
 #if SERVO_SHAFT_INSTALLED_DOWN
     slope_us_per_deg = -slope_us_per_deg;
 #endif

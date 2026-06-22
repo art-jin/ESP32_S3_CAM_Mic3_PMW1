@@ -7,18 +7,22 @@
 
 /* JS6620 hobby servo driver via LEDC PWM.
  *
- * Hardware: see CLAUDE.md "Servo hardware (planned)".
+ * Hardware: see CLAUDE.md "Servo hardware".
+ *   - JS6620 is a **270°** rotation servo (not the typical 180°)
  *   - GPIO 38, 50 Hz PWM, pulse 500–2500 µs
  *   - Drives a 15-tooth pinion inside a 50-tooth internal-mesh ring gear
- *   - Reduction 50/15 = 3.33 : 1 → 180° servo travel = ~54° ring travel
- *   - Therefore the usable ANGLE range at the ring gear is ±27° about home
+ *   - Reduction 50/15 = 3.33 : 1 → 270° servo travel = ~81° ring travel
+ *   - Therefore the mechanical ANGLE range at the ring gear is ±40.5°
+ *   - We clamp to ±30° (safety margin below ±40.5° mechanical limit,
+ *     also leaves room for the feed-forward tracker to maneuver without
+ *     saturating the clamp)
  *
  * Angle sign convention: looking down at the gimbal from above the array,
  * positive angle = clockwise rotation of the ring gear (and the mic array
  * mounted on it). 0° = home (servo centered at 1500 µs).
  *
  * This is the pure driver layer — no tracking logic, no motion-pause. The
- * tracker module (planned) sits on top. */
+ * tracker module sits on top. */
 
 #define SERVO_GPIO             38
 
@@ -31,15 +35,13 @@
 #define SERVO_PULSE_MAX_US     2500
 
 /* Mechanical limits at the ring gear (clamp range).
- * True mechanical limit is ±27° (180° servo travel / 3.33 reduction).
- * Tuned to ±20° for stability: at larger travel the closed-loop
- * tracker enters feedback oscillation (servo rotates → array rotates →
- * perceived source azimuth changes → stable_sextant flips → tracker
- * commands opposite direction → loop). ±20° is the largest window
- * we found that stays stable for sources within the trackable arc.
- * Without an IMU to track absolute orientation, this is a hard limit. */
-#define SERVO_ANGLE_MIN_DEG    (-20.0f)
-#define SERVO_ANGLE_MAX_DEG    (+20.0f)
+ * True mechanical limit is ±40.5° (270° servo travel / 3.33 reduction).
+ * Clamped to ±30° — leaves a safety margin below the mechanical limit
+ * and stays well within the feed-forward tracker's stable region.
+ * The earlier ±20° limit was based on the wrong 180° servo assumption
+ * and was unnecessarily conservative. */
+#define SERVO_ANGLE_MIN_DEG    (-30.0f)
+#define SERVO_ANGLE_MAX_DEG    (+30.0f)
 
 /* Servo shaft orientation switch.
  *
