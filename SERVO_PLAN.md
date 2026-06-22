@@ -175,55 +175,47 @@ tracker_mode_t tracker_get_mode(void);
 
 **验收结果（2026-06-22）**：用户启动板子后观察到舵机完成完整 sweep 序列（0° → +27° → 0° → -27° → 0°，~13 秒），每个位置都能稳定保持。UART 日志里 `servo=+0.0°` 字段在 self-test 完成后稳定显示。Phase 1 通过。
 
-### Phase 2 — 跟踪策略骨架（预计 0.5 天）
+### Phase 2 — 跟踪策略骨架（预计 0.5 天） ✅ 2026-06-22 完成
 
 **目标**：用户说话时舵机自动微调，朝向声源。
 
 **任务**：
-- [ ] 创建 `main/tracker.{c,h}`
-- [ ] `tracker_init()` 初始化配置
-- [ ] `tracker_update()` 核心逻辑：
+- [x] 创建 `main/tracker.{c,h}`
+- [x] `tracker_init()` 初始化配置
+- [x] `tracker_update()` 核心逻辑：
   1. 如果 `doa->mode == DOA_MODE_INVALID`，不动（保持上次目标）
-  2. 如果 `doa->mode == DOA_MODE_3MIC`：target = `doa->azimuth_deg - 180.0 + cfg->home_deg`，clamp ±27°
+  2. 如果 `doa->mode == DOA_MODE_3MIC`：target = `doa->azimuth_deg - 180.0 + cfg->home_deg`，clamp ±20°
   3. 如果 `doa->mode == DOA_MODE_2MIC`：不更新目标（半平面歧义太多），仅记录到日志
-- [ ] deadband：如果 `|target - servo_get_angle_deg()| < deadband_deg`，不调 `servo_set_angle_deg`
-- [ ] 在 `main.c::mic_task` 的 `doa_process` 之后调用 `tracker_update(&r)`
-- [ ] UART 日志加 `target=%+.1f°` 字段
+- [x] deadband：如果 `|target - servo_get_angle_deg()| < deadband_deg`，不调 `servo_set_angle_deg`
+- [x] 在 `main.c::mic_task` 的 `doa_process` 之后调用 `tracker_update(&r)`
+- [x] UART 日志加 `servo=%+.1f°` 字段
 
-**测试方法**：用户在 6oc ± 27° 范围内（即 5oc–7oc 之间）移动，舵机应该平滑跟随。走到 4oc 或更远，舵机应该钳制在 +27° 或 -27° 不动。
+**验收结果**：tracker 逻辑跑通，舵机确实根据 3-mic DOA 跟随声源。但暴露了正反馈振荡和方向反两个新问题（Phase 3 解决）。
 
-**已知坑（提前防）**：
-- **跟踪振荡**：DOA 读到 α=180° → 舵机回到 0° → 但用户实际在 178° → 阵列转了 -2° → DOA 又读到 180° → 循环。**解法**：deadband ≥ 3° 或加 hysteresis。这是必须的。
-- **迟延叠加**：`stable_sextant` 已经 1.5 秒滞后，再加上舵机 0.5 秒机械响应，用户走动时滞后 2 秒。文档化即可。
+### Phase 3 — Motion-pause 噪音抑制 + 稳定性（预计 1 天） ✅ 2026-06-22 完成
 
-### Phase 3 — Motion-pause 噪音抑制（预计 1 天）
-
-**目标**：舵机运动期间及之后 250 ms 内，DOA 不更新。避免舵机噪音反馈成假方位。
+**目标**：舵机运动期间及之后 750 ms 内，tracker 跳过 DOA 更新。避免舵机噪音反馈成假方位。同时解决单帧噪声驱动舵机跳到极限的问题。
 
 **任务**：
-- [ ] `servo.c` 里实现 `servo_is_moving()`：
-  - 记录每次 `servo_set_angle_deg` 的目标值和当前 duty
-  - 启动一个 FreeRTOS 软定时器或 task，每次调用 reset 计时器
-  - 计时器归零后 250 ms 内 `is_moving` 仍为 true
-- [ ] `main.c::mic_task` 修改：
-  ```c
-  if (tracker_get_mode() == TRACKER_MODE_SETTLING) {
-      // 跳过 doa_process，但仍然读 DMA 防止 I²S buffer 满
-      // 清零 doa_result_t 或标记 mode=INVALID
-      continue;
-  }
-  doa_process(...);
-  tracker_update(&r);
-  ```
-- [ ] `tracker.c` 实现模式切换：
-  - 收到新目标 → 检查是否 > deadband → 如果是，进 TRACKING，调 servo_set_angle
-  - servo_set_angle 触发 motion → 等舵机内部 motion 完成（或固定等 500ms）→ 进 SETTLING
-  - SETTLING 等 250ms → 回 IDLE/TRACKING
+- [x] `servo_is_moving()`：基于 `esp_timer_get_time()` 距上次命令的时差，holdoff 750 ms
+- [x] `tracker_update()` 在最前面加 motion-pause gate
+- [x] **机械限位 ±20°**（原计划 ±27°，但发现机械止位震动严重，缩到 ±20°）
+- [x] **超范围抑制** `out_of_range_deg=45°`：如果目标超出 ±45°（远超机械范围），不追，避免极限之间振荡
+- [x] **方向反转逻辑** `SERVO_SHAFT_INSTALLED_DOWN` 开关，实测确认 = 0（即不需要反转，内齿圆盘 + servo 自带方向恰好抵消）
+- [x] **2-frame agreement 滤波** `target_agreement_deg=10°`：连续 2 帧 raw target 差距 < 10° 才命令运动。单帧 GCC-PHAT 暂态（如 servo buzz 漏过 motion-pause）被滤掉。真实位置变化跨多帧持续，能通过。
 
-**测试方法**：让舵机运动期间对着麦说话——不应该报出与舵机位置相关的固定"幻像方位"（之前未抑制时常见症状）。
+**验收结果（2026-06-22）**：
 
-**备选增强（可选，先跳过）**：
-- 在 `doa.c::gcc_phat` 之前对 PCM 加 300 Hz high-pass（1阶 IIR），滤掉舵机 200-800Hz 噪音带。代价：低频语音信息丢失，GCC-PHAT 在静音/低 SNR 下更敏感。Phase 3 完成后如果发现 motion-pause 不够再加。
+| 测试位置 | 期望 servo | 实测 servo | 结果 |
+|---|---|---|---|
+| 6 点钟（M3 后方）| 0° | -0.7°（稳定 15s）| ✓ |
+| 7 点钟（M3 左侧）| +20° | -4° → +20°（跟踪到位）| ✓ |
+| 3 点钟（远超范围）| 抑制不动 | 抑制不动 | ✓ |
+
+**意外发现**（写入 CLAUDE.md/SERVO_PLAN）：
+1. 舵机在机械止位（±27°）会持续震动，PCB 耦合到 DAT0 双麦 → ρ01=1.0 → L/R 折叠 → 偶尔产生幻像 3-mic 方位 → 反馈到 tracker → 振荡。**解法**：限制 ±20° + motion-pause。
+2. 舵机轴向下安装时，方向**需要**在代码里翻转（`SERVO_SHAFT_INSTALLED_DOWN=1`）。这与第一次直觉相反——内齿圆盘和舵机的方向惯例**不**完全抵消。**确认方法**：用户在 7 点钟 → servo 应命令 +20° → M3 物理上转到 7oc 方向（朝用户）。如果 M3 转到 5oc（背离用户），方向反了，toggle 这个宏。
+3. 用户在 M3 正后方（6 点钟）时，M1/M2 在远端听到弱信号 → L/R 折叠严重 → 3-mic 帧稀少（每 5 秒 0-2 帧）。这是 3 麦阵列的几何盲区。2-frame agreement 滤波在这种稀疏率下仍能工作，但响应慢。
 
 ### Phase 4 — UART 调试 + 调参（预计 0.5 天）
 

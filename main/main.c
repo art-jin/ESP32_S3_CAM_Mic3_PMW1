@@ -10,6 +10,7 @@
 #include "doa.h"
 #include "mic_capture.h"
 #include "servo.h"
+#include "tracker.h"
 
 static const char *TAG = "main";
 
@@ -70,6 +71,12 @@ static void mic_task(void *arg)
         doa_result_t r;
         doa_process(s_c0, s_c1, s_c2, DOA_FFT_N, &r);
 
+        /* Phase 2: hand the DOA result to the tracker, which decides
+         * whether to move the servo. Tracker applies deadband + clamp
+         * internally. (Phase 3 will add motion-pause to skip DOA updates
+         * while the servo is moving, so servo whine doesn't feed back.) */
+        tracker_update(&r);
+
         if      (r.mode == DOA_MODE_3MIC) frames_3++;
         else if (r.mode == DOA_MODE_2MIC) frames_2++;
         else                              frames_bad++;
@@ -104,67 +111,55 @@ static void mic_task(void *arg)
         const char *sext = doa_sextant_label(r.sextant, r.mode);
         const char *stable = doa_sextant_label(r.stable_sextant,
                                                r.stable_sextant >= 0 ? DOA_MODE_3MIC : DOA_MODE_INVALID);
+        const char *tmode;
+        switch (tracker_get_mode()) {
+            case TRACKER_MODE_TRACKING:   tmode = "TRK"; break;
+            case TRACKER_MODE_IDLE:       tmode = "idl"; break;
+            case TRACKER_MODE_SUPPRESSED: tmode = "sup"; break;
+            case TRACKER_MODE_DISABLED:   tmode = "OFF"; break;
+            default:                      tmode = "?";
+        }
 
         if (r.mode == DOA_MODE_3MIC) {
             ESP_LOGI(TAG,
                 ">>> 3-MIC  az=%6.1f°  sect=%d (%s)  stable=%d (%s)  conf=%.2f  "
                 "lag01=%+5.2f lag02=%+5.2f lag12=%+5.2f  "
                 "| ac %.0f/%.0f/%.0f  ρ01=%.2f peak01=%.2f  "
-                "| servo=%+.1f° %s",
+                "| servo=%+.1f° %s [%s]",
                 r.azimuth_deg, r.sextant, sext,
                 r.stable_sextant, stable, r.confidence,
                 r.lag_pair[0], r.lag_pair[1], r.lag_pair[2],
                 ac0, ac1, ac2, r.lr_corr, r.peak_pair[0],
-                servo_get_angle_deg(), servo_is_moving() ? "[MOTION]" : "");
+                servo_get_angle_deg(), servo_is_moving() ? "[MOTION]" : "",
+                tmode);
         } else if (r.mode == DOA_MODE_2MIC) {
             ESP_LOGI(TAG,
                 " .  2-MIC  half=%5.1f°  bin=%d (%s)  conf=%.2f  "
                 "lag02=%+5.2f  mask=0x%x  "
                 "| ac %.0f/%.0f/%.0f  ρ01=%.2f (L/R collapsed)  "
-                "| servo=%+.1f° %s",
+                "| servo=%+.1f° %s [%s]",
                 r.azimuth_deg, r.sextant, sext, r.confidence,
                 r.lag_pair[1], r.mics_valid_mask,
                 ac0, ac1, ac2, r.lr_corr,
-                servo_get_angle_deg(), servo_is_moving() ? "[MOTION]" : "");
+                servo_get_angle_deg(), servo_is_moving() ? "[MOTION]" : "",
+                tmode);
         } else {
             ESP_LOGI(TAG,
                 "    -----  conf=%.2f  stable=%d (%s)  "
                 "| ac %.0f/%.0f/%.0f  ρ01=%.2f  (silent / noisy)  "
-                "| servo=%+.1f° %s",
+                "| servo=%+.1f° %s [%s]",
                 r.confidence, r.stable_sextant, stable,
                 ac0, ac1, ac2, r.lr_corr,
-                servo_get_angle_deg(), servo_is_moving() ? "[MOTION]" : "");
+                servo_get_angle_deg(), servo_is_moving() ? "[MOTION]" : "",
+                tmode);
         }
         taskYIELD();
     }
 }
 
-/* Phase 1 servo verification: sweep through the full mechanical range
- * once at boot so the user can visually confirm the servo + gear reduction
- * are working. The sweep is deliberately slow (1 step/sec) so motion is
- * easy to track by eye. This task self-deletes after one sweep.
- *
- * Phase 2 will remove this and replace it with tracker-driven motion. */
-static void servo_selftest_task(void *arg)
-{
-    (void)arg;
-    ESP_LOGI(TAG, "servo self-test: sweep ±%d° in 5° steps, ~1s/step",
-             (int)SERVO_ANGLE_MAX_DEG);
-    const float steps[] = {0, +5, +10, +15, +20, +27, 0,
-                           -5, -10, -15, -20, -27, 0};
-    for (size_t i = 0; i < sizeof(steps)/sizeof(steps[0]); i++) {
-        ESP_LOGI(TAG, "  servo step %zu: %+.0f°", i, steps[i]);
-        servo_set_angle_deg(steps[i]);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-    ESP_LOGI(TAG, "servo self-test: done. servo at home (%.1f°).",
-             servo_get_angle_deg());
-    vTaskDelete(NULL);
-}
-
 void app_main(void)
 {
-    ESP_LOGI(TAG, "=== 3DMIC-291 GCC-PHAT DOA + servo starting ===");
+    ESP_LOGI(TAG, "=== 3DMIC-291 GCC-PHAT DOA + servo tracker starting ===");
     ESP_LOGI(TAG, "  pins: CLK0=%d CLK1=%d DAT0=%d DAT1=%d",
              MIC_CLK0_GPIO, MIC_CLK1_GPIO, MIC_DAT0_GPIO, MIC_DAT1_GPIO);
     ESP_LOGI(TAG, "  PCM=%d Hz  FFT=%d pts  K=%.3f samp  max_lag=±%d",
@@ -173,10 +168,7 @@ void app_main(void)
     doa_init();
     ESP_ERROR_CHECK(mic_capture_init());
     ESP_ERROR_CHECK(servo_init());
-
-    /* Run servo self-test in parallel with mic task. Self-test runs once,
-     * ~13 seconds, then self-deletes. */
-    xTaskCreate(servo_selftest_task, "servo_test", 3072, NULL, 1, NULL);
+    tracker_init(NULL);
 
     /* 8 KB stack covers the FFT scratch (static) + libc math + ESP_LOG. */
     xTaskCreate(mic_task, "mic", 8192, NULL,

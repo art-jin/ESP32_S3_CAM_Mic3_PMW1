@@ -30,9 +30,27 @@
 #define SERVO_PULSE_CENTER_US  1500
 #define SERVO_PULSE_MAX_US     2500
 
-/* Mechanical limits at the ring gear (clamp range). */
-#define SERVO_ANGLE_MIN_DEG    (-27.0f)
-#define SERVO_ANGLE_MAX_DEG    (+27.0f)
+/* Mechanical limits at the ring gear (clamp range).
+ * The true mechanical limit is ±27° (180° servo travel / 3.33 reduction),
+ * but we clamp tighter to ±20° to avoid the mechanical-endstop buzzing that
+ * creates audible noise correlated across the DAT0 mic pair — that buzz
+ * drives ρ01 → 1.0, collapses L/R, and creates phantom DOA readings that
+ * form a positive feedback loop with the tracker. */
+#define SERVO_ANGLE_MIN_DEG    (-20.0f)
+#define SERVO_ANGLE_MAX_DEG    (+20.0f)
+
+/* Servo shaft orientation switch.
+ *
+ * The JS6620 is installed shaft-down in the current gimbal. Empirical
+ * testing (2026-06-22): with SERVO_SHAFT_INSTALLED_DOWN=1, a positive
+ * servo command produces CW rotation of the array viewed from above
+ * (M3 at 6oc moves toward 7oc). This matches the tracker's intent
+ * (positive target = rotate array CW from above to bring M3 toward
+ * a source at α > 180°).
+ *
+ * Set to 0 if the servo is reinstalled shaft-up, or if the array ends
+ * up rotating the wrong way (servo = +20° moves M3 to 5oc instead of 7oc). */
+#define SERVO_SHAFT_INSTALLED_DOWN  1
 
 esp_err_t servo_init(void);
 

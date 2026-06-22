@@ -81,9 +81,16 @@ void servo_set_angle_deg(float angle_deg)
     s_target_angle_deg = angle_deg;
 
     /* Linear map: angle [-27°, +27°] → pulse [500, 2500] µs.
-     * slope = (2500-500) / (27-(-27)) = 2000/54 = 37.04 µs/deg */
-    float pulse_f = SERVO_PULSE_CENTER_US
-                  + angle_deg * (2000.0f / 54.0f);
+     * slope = (2500-500) / (27-(-27)) = 2000/54 = 37.04 µs/deg.
+     *
+     * Sign depends on shaft orientation — see SERVO_SHAFT_INSTALLED_DOWN
+     * in servo.h. With shaft-down, we negate so that positive angle still
+     * means "CW viewed from above" (which is what tracker/geometry use). */
+    float slope_us_per_deg = 2000.0f / 54.0f;
+#if SERVO_SHAFT_INSTALLED_DOWN
+    slope_us_per_deg = -slope_us_per_deg;
+#endif
+    float pulse_f = SERVO_PULSE_CENTER_US + angle_deg * slope_us_per_deg;
     servo_set_pulse_us((uint32_t)(pulse_f + 0.5f));
 }
 
