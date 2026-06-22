@@ -37,14 +37,24 @@ static float ac_rms(const int16_t *x, size_t n)
 }
 
 /* Deinterleave the 3-channel DMA buffer into per-channel scratch buffers,
- * taking the first DOA_FFT_N samples of each. */
+ * taking the first DOA_FFT_N samples of each, then apply pre-emphasis
+ * in-place (y[i] = x[i] - 0.97*x[i-1]). Pre-emphasis is applied to ALL
+ * downstream consumers: L/R correlation (ρ01), GCC-PHAT, AC RMS. This
+ * is critical — applying it only inside GCC-PHAT (as an earlier version
+ * did) left ρ01 operating on raw PCM, so speech (dominated by low-freq
+ * voiced energy) still showed ρ01 > 0.95 → L/R collapse → no 3-mic. */
 static void deinterleave(const int16_t *dma, size_t n_per_ch)
 {
     size_t take = n_per_ch < DOA_FFT_N ? n_per_ch : DOA_FFT_N;
+    float prev0 = 0.0f, prev1 = 0.0f, prev2 = 0.0f;
     for (size_t i = 0; i < take; i++) {
-        s_c0[i] = dma[i * MIC_NUM_CHANNELS + 0];
-        s_c1[i] = dma[i * MIC_NUM_CHANNELS + 1];
-        s_c2[i] = dma[i * MIC_NUM_CHANNELS + 2];
+        float r0 = dma[i * MIC_NUM_CHANNELS + 0];
+        float r1 = dma[i * MIC_NUM_CHANNELS + 1];
+        float r2 = dma[i * MIC_NUM_CHANNELS + 2];
+        s_c0[i] = (int16_t)(r0 - 0.97f * prev0);
+        s_c1[i] = (int16_t)(r1 - 0.97f * prev1);
+        s_c2[i] = (int16_t)(r2 - 0.97f * prev2);
+        prev0 = r0; prev1 = r1; prev2 = r2;
     }
 }
 
