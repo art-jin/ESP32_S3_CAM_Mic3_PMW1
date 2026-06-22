@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Servo driver on GPIO38 is **not yet implemented** — direction output is UART only.
 
-## Servo hardware (planned, not yet implemented)
+## Servo hardware (Phase 1-3 implemented, 2026-06-22)
 
 | Component | Spec |
 |---|---|
@@ -20,23 +20,36 @@ Servo driver on GPIO38 is **not yet implemented** — direction output is UART o
 | Gear mesh style | Pinion runs inside ring (internal mesh, same rotation direction) |
 | Reduction ratio | 50 / 15 = **3.33 : 1** (servo rotates 3.33× for disc to rotate 1×) |
 | Disc coverage for 180° servo travel | 180° / 3.33 = **~54°** of arc |
+| Soft clamp | **±20°** (tighter than 27° mechanical limit — see "Pitfalls §5" below) |
 | Disc mounting position | 12 cm below the mic array, at the 12 o'clock direction |
 
 ### Mechanical implications
 
-- The disc (carrying the mic array through its gimbal) can only sweep **~54° of arc** — less than one 60° sextant. Full 360° tracking is mechanically impossible with this gear reduction.
-- Effective pointing range: ±27° about the disc's "home" position.
-- Practical tracking strategy: fix home at the most common source direction (e.g., user's usual seat), servo fine-tunes within ±27°. Sources outside this arc clamp to the nearest limit.
+- The disc (carrying the mic array through its gimbal) can only sweep **~40° of arc** (±20° soft clamp) — less than one 60° sextant. Full 360° tracking is mechanically impossible with this gear reduction.
+- Effective pointing range: M3 can move from **5:20 o'clock to 6:40 o'clock** about its home position.
+- Practical tracking strategy: fix home at the most common source direction (e.g., user's usual seat at 6oc), servo fine-tunes within ±20°. Sources outside this arc either clamp to the nearest limit or are suppressed entirely (beyond ±45°).
 - Parallax: 12 cm offset between servo and array center is small relative to typical 30–50 cm voice distance — sub-1° angular error, negligible vs the ±15° single-frame DOA noise.
 
-### Servo noise considerations
+### Tracking pipeline
 
-JS6620 (and similar hobby servos) produce audible whine during motion (typically 200–800 Hz motor drive + broadband gear noise). All 3 mics pick this up, creating a consistent "phantom source" at the servo's direction that corrupts GCC-PHAT. Mitigation strategy (in `SERVO_PLAN.md`):
+```
+I²S DMA → doa_process → tracker_update → servo_set_angle → LEDC PWM → GPIO38
+                              │
+                              ▼
+                      Motion-pause gate (skip if servo_is_moving)
+                      Out-of-range gate  (|target| > 45° → suppress)
+                      2-frame agreement (require 2 consecutive agreeing targets)
+                      Deadband           (skip if Δtarget < 3°)
+                      Clamp              (±20°)
+```
 
-1. **Motion pause** (primary): freeze DOA updates while servo is moving + 200 ms settling window.
-2. **Spectral masking** (secondary): optional high-pass or band-stop filter on mic PCM before GCC-PHAT to suppress the 200–800 Hz servo band. Voice energy in this band is also removed, but SNR improves when servo is holding.
+### Phase 4 limitation: UART console
 
-See `SERVO_PLAN.md` for the full development plan.
+Console code exists (`main/console.{c,h}`) but UART RX on this board doesn't work — CH343 USB-UART appears to be wired for TX only (ESP32 → host log output). Command input from host isn't physically received by the chip. Bypassing the VFS layer with direct `uart_read_bytes` also failed. Code retained for future hardware that supports bidirectional UART.
+
+Tuning still requires editing `TRACKER_DEFAULT_CONFIG` in `main/tracker.h` and reflashing.
+
+See `SERVO_PLAN.md` for the full development history (5 phases, 3 implemented + 1 hardware-limited).
 
 ## Project goal
 
@@ -215,6 +228,6 @@ clangd will report `'sys/features.h' file not found` and unused-include warnings
 
 ## Implementation direction still open
 
-1. **Servo driver on GPIO38** — `stable_sextant` should drive the JS6620 servo through the 15T/50T gear reduction to point the mic array's 6 o'clock direction at the sound source. Hardware setup is documented above; development plan is in `SERVO_PLAN.md`. Mechanical coverage is limited to ~54° of arc, so the system can only track sources within a ±27° window about its home position.
+1. **UART console for runtime tuning** — `console.c` is written but the board's CH343 USB-UART appears to be wired for log output only (no host→ESP32 RX path). To unblock, either jumper a real USB-UART to other GPIOs, or switch to native USB-CDC via `CONFIG_ESP_CONSOLE_USB_CDC=y` (requires USB cable to the S3's native USB port, not the CH343 port).
 2. **Voice-activity detection gate** — currently the algorithm tries to localize every frame; adding a simple energy gate (skip if `AC_RMS < 30 LSB` on all channels) would suppress more noise frames and free CPU.
 3. **PSRAM not used** — all buffers are internal SRAM (`s_dma`, FFT scratch, lag history). If window size or FFT order is increased, move them to PSRAM (board has 8 MB octal PSRAM).

@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "console.h"
 #include "doa.h"
 #include "mic_capture.h"
 #include "servo.h"
@@ -169,6 +170,7 @@ void app_main(void)
     ESP_ERROR_CHECK(mic_capture_init());
     ESP_ERROR_CHECK(servo_init());
     tracker_init(NULL);
+    console_init();
 
     /* 8 KB stack covers the FFT scratch (static) + libc math + ESP_LOG. */
     xTaskCreate(mic_task, "mic", 8192, NULL,

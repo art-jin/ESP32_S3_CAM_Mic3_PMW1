@@ -217,20 +217,29 @@ tracker_mode_t tracker_get_mode(void);
 2. 舵机轴向下安装时，方向**需要**在代码里翻转（`SERVO_SHAFT_INSTALLED_DOWN=1`）。这与第一次直觉相反——内齿圆盘和舵机的方向惯例**不**完全抵消。**确认方法**：用户在 7 点钟 → servo 应命令 +20° → M3 物理上转到 7oc 方向（朝用户）。如果 M3 转到 5oc（背离用户），方向反了，toggle 这个宏。
 3. 用户在 M3 正后方（6 点钟）时，M1/M2 在远端听到弱信号 → L/R 折叠严重 → 3-mic 帧稀少（每 5 秒 0-2 帧）。这是 3 麦阵列的几何盲区。2-frame agreement 滤波在这种稀疏率下仍能工作，但响应慢。
 
-### Phase 4 — UART 调试 + 调参（预计 0.5 天）
+### Phase 4 — UART 调试 + 调参（预计 0.5 天） ⚠️ 受硬件限制未完成
 
 **目标**：方便现场调整参数，不用每次改代码重烧。
 
 **任务**：
-- [ ] UART 加一行命令解析（用 `esp_console` 或简单的 `fgets`+`sscanf`）：
-  - `servo <angle>` — 手动设舵机角度
-  - `tracker on/off` — 启用/禁用自动跟踪
-  - `cfg deadband <deg>` — 实时改死区
-  - `cfg home <deg>` — 实时改 home 偏移
-  - `cfg settle <ms>` — 实时改 settle 时间
-- [ ] 把所有配置存到 NVS，重启后恢复（可选）
+- [x] UART 命令解析（`console.c` 完整实现，支持 `help` / `status` / `servo` / `tracker` / `cfg`）
+- [x] Console 任务（直接用 `uart_read_bytes` + `uart_write_bytes`，绕开 VFS 层）
+- [ ] **实测 UART RX 不工作** — 发送 `help\r\n` 等命令后，console task 不响应。Task 已运行（boot log 显示 `console ready`），但 `uart_read_bytes` 始终无数据
 
-**测试方法**：通过 UART 实时调参，找到 deadband / settle 的最佳值。
+**根本原因（推测）**：这块 GOOUUU S3-CAM 板的 CH343 USB-UART 芯片**只接了单向（ESP32 → host）**，用于 log 输出。Host → ESP32 方向（GPIO44 RX）的物理连接可能不存在或被切断。这是板级硬件设计问题，软件无法绕过。
+
+**修复路径（如果未来需要）**：
+1. 用万用表测 CH343 TX pin 是否连到 GPIO44
+2. 如果没连，需要飞线（用户不能焊接，所以这不可行）
+3. 或者用 OTG + 外置 USB-UART 接其他 GPIO 做 console
+4. 或者用 ESP32-S3 的原生 USB-CDC（需要改 sdkconfig 的 `CONFIG_ESP_CONSOLE_USB_CDC=y`，并接到不同的 USB 端口）
+
+**已交付的代码**：`main/console.{c,h}` 完整保留，等未来硬件支持时直接可用。
+
+**临时调参方法**：当前改参数还是要改 `main/main.c` 里的 `tracker_init(&cfg)` 或 `main/tracker.h` 里的 `TRACKER_DEFAULT_CONFIG` 宏，重新烧录。常调的几个：
+- `deadband_deg`（默认 3°）：增大可减少抖动但响应慢
+- `out_of_range_deg`（默认 45°）：减小则跟踪范围更窄（保守），增大则更激进但易振荡
+- `min_confidence`（默认 0.45）：增大可过滤更多噪声帧但 3-mic 占比下降
 
 ### Phase 5 — 集成测试 + 文档（预计 0.5 天）
 
