@@ -34,7 +34,10 @@ Tagged `v1.1`. Earlier tags `servo-stable-1.0` (slow but stable, pre-feed-forwar
 | 6oc user, 12s capture | swing = 0.0° (perfectly stable) |
 | 6oc → 7oc transition | first motion at **8.7s**, servo → +20° |
 | 7oc user, 30s long-term | swing = 0.0°, zero rebound |
+| 6oc → 5oc transition | ~30s, servo → -16° (close to -20° limit) |
 | 3oc/9oc (out of range) | suppressed, servo holds last position |
+
+The 5oc case is slower than 7oc due to asymmetric L/R collapse: M1 (at 2oc, closer to 5oc user) hears stronger signal than M2 (at 10oc, far side). The asymmetry between DAT0's two slots is different than at 7oc, leading to different collapse statistics. This is a 3-mic array geometric property, not a tuning issue.
 
 ### Tracking pipeline
 
