@@ -4,40 +4,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Working (v1.1).** 360° six-direction sound source localization + servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
+**Working (v1.2).** 360° six-direction sound source localization + servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
 
 - DOA: 6-position calibration, mean azimuth offset **< ±5°** at 30–50 cm voice distance.
-- Servo tracking: ±20° mechanical range, **8.7s response time**, **perfectly stable (zero rebound)** thanks to feed-forward compensation. See "Pitfalls §6" for the breakthrough.
+- Servo tracking: **±30° mechanical range** (270° JS6620 servo, 3.33:1 gear reduction), **0.5–3.9s response time**, **perfectly stable (zero rebound)** thanks to feed-forward compensation. See "Pitfalls §6" for the breakthrough.
 - Direction output: UART log + physical servo pointing.
 
-Tagged `v1.1`. Earlier tags `servo-stable-1.0` (slow but stable, pre-feed-forward), `servo-tracking-1.0` (Phase 1-3 done), `3麦阵列测试完成1.0` (DOA only).
+Tagged `v1.2`. Earlier tags: `v1.1` (pre-270°-correction), `servo-stable-1.0` (strict stable, pre-feed-forward), `servo-tracking-1.0` (Phase 1-3 done), `3麦阵列测试完成1.0` (DOA only).
 
 ## Servo hardware (Phase 1-3 implemented, 2026-06-22)
 
 | Component | Spec |
 |---|---|
-| Servo model | JS6620 (standard 180° hobby PWM servo) |
+| Servo model | JS6620 (**270°** rotation hobby PWM servo, not the typical 180°) |
 | PWM signal | GPIO38, LEDC 50 Hz, pulse 500–2500 µs |
 | Servo shaft orientation | Points **down** (away from mic array) |
 | Drive gear (on servo shaft) | 15 teeth, external |
 | Driven gear (disc) | 50 teeth, **internal** (teeth face inward) — ring gear |
 | Gear mesh style | Pinion runs inside ring (internal mesh, same rotation direction) |
 | Reduction ratio | 50 / 15 = **3.33 : 1** (servo rotates 3.33× for disc to rotate 1×) |
-| Disc coverage for 180° servo travel | 180° / 3.33 = **~54°** of arc |
-| Soft clamp | **±20°** (tighter than 27° mechanical limit — see "Pitfalls §5") |
+| Disc coverage for 270° servo travel | 270° / 3.33 = **~81°** of arc |
+| Mechanical limit at disc | **±40.5°** |
+| Soft clamp | **±30°** (safety margin below ±40.5° mechanical limit) |
 | Disc mounting position | 12 cm below the mic array, at the 12 o'clock direction |
 
-### Performance (v1.1, with feed-forward)
+### Performance (v1.2, 270° servo slope + feed-forward)
 
 | Test | Result |
 |---|---|
 | 6oc user, 12s capture | swing = 0.0° (perfectly stable) |
-| 6oc → 7oc transition | first motion at **8.7s**, servo → +20° |
-| 7oc user, 30s long-term | swing = 0.0°, zero rebound |
-| 6oc → 5oc transition | ~30s, servo → -16° (close to -20° limit) |
+| 6oc → 7oc transition | first motion at **0.5s**, servo → **+30°** |
+| 6oc → 5oc transition | first motion at **3.9s**, servo → **-30°** |
+| 7oc long-term | swing = 0.0°, zero rebound |
 | 3oc/9oc (out of range) | suppressed, servo holds last position |
 
-The 5oc case is slower than 7oc due to asymmetric L/R collapse: M1 (at 2oc, closer to 5oc user) hears stronger signal than M2 (at 10oc, far side). The asymmetry between DAT0's two slots is different than at 7oc, leading to different collapse statistics. This is a 3-mic array geometric property, not a tuning issue.
+v1.1 → v1.2 improvement came from correcting the pulse-to-angle slope (code assumed 180° servo, JS6620 is actually 270° per spec). This made the 5oc and 7oc cases symmetric — the v1.1 asymmetry was a slope bug, not a geometric property.
 
 ### Tracking pipeline
 
