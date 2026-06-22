@@ -31,11 +31,13 @@
 #define SERVO_PULSE_MAX_US     2500
 
 /* Mechanical limits at the ring gear (clamp range).
- * The true mechanical limit is ±27° (180° servo travel / 3.33 reduction),
- * but we clamp tighter to ±20° to avoid the mechanical-endstop buzzing that
- * creates audible noise correlated across the DAT0 mic pair — that buzz
- * drives ρ01 → 1.0, collapses L/R, and creates phantom DOA readings that
- * form a positive feedback loop with the tracker. */
+ * True mechanical limit is ±27° (180° servo travel / 3.33 reduction).
+ * Tuned to ±20° for stability: at larger travel the closed-loop
+ * tracker enters feedback oscillation (servo rotates → array rotates →
+ * perceived source azimuth changes → stable_sextant flips → tracker
+ * commands opposite direction → loop). ±20° is the largest window
+ * we found that stays stable for sources within the trackable arc.
+ * Without an IMU to track absolute orientation, this is a hard limit. */
 #define SERVO_ANGLE_MIN_DEG    (-20.0f)
 #define SERVO_ANGLE_MAX_DEG    (+20.0f)
 
