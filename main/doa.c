@@ -149,6 +149,41 @@ static int azimuth_to_sextant(float az)
     return s;
 }
 
+/* Per-sextant azimuth calibration offsets (Phase A).
+ *
+ * Values are the NEGATIVE of measured bias — i.e., what we ADD to a raw
+ * azimuth to remove systematic error. Updated 2026-06-25 after a fresh
+ * 6-position whistle calibration run (tracker disabled, servo at 0°):
+ *
+ *   sextant  meaning           raw meas  true   raw err   correction
+ *   0        12oc (α=0°)       357.3°    360°   -2.7°     +3.0
+ *   1        2oc  (α=60°)       66.3°     60°   +6.3°     -6.0   (s=1 unreliable — see note)
+ *   2        4oc  (α=120°)    117.3°    120°   -2.7°     +3.0
+ *   3        6oc  (α=180°)    179.8°    180°   -0.2°      0.0
+ *   4        8oc  (α=240°)    239.3°    240°   -0.7°     +1.0
+ *   5        10oc (α=300°)    295.3°    300°   -4.7°     +5.0
+ *
+ * Note on s=1: the v1.3 (2026-06-22) measurement at 3oc (α=90°, also s=1)
+ * showed raw 83.9° → -6.1° bias, OPPOSITE sign to today's 2oc reading.
+ * This means the bias within s=1 is not monotonic; a single offset
+ * cannot fully correct it. Today's value favors 2oc since 3oc is the
+ * s=1/s=2 boundary and effectively shared. Future work: geometric
+ * calibration (Phase C, Levenberg-Marquardt) to replace per-sextant table.
+ *
+ * Day-to-day variation: v1.3 had 12oc at +6.6° bias, today -2.7°.
+ * ~5° swing. Treat this table as "best single-day estimate," not absolute.
+ *
+ * 9oc (α=270°) excluded — array's geometric blind spot (M1 shadowed by
+ * PCB), reported via 2-mic fallback, not 3-mic. */
+static const float s_sextant_offset[6] = {
+    +3.0f,   /* s=0  12oc */
+    -6.0f,   /* s=1  2oc  */
+    +3.0f,   /* s=2  4oc  */
+     0.0f,   /* s=3  6oc  */
+    +1.0f,   /* s=4  8oc  */
+    +5.0f,   /* s=5  10oc */
+};
+
 /* ---- Output hysteresis state ----
  * Require DOA_STABLE_STREAK consecutive identical raw sextant readings
  * before stable_sextant updates. Suppresses per-frame jitter. */
@@ -325,6 +360,18 @@ void doa_process(const int16_t *c0, const int16_t *c1, const int16_t *c2,
         float alpha_rad = atan2f(sin_a, cos_a);
         float alpha_deg = alpha_rad * 180.0f / (float)M_PI;
         if (alpha_deg < 0.0f) alpha_deg += 360.0f;
+
+        /* Apply per-sextant calibration correction (Phase A).
+         * Look up by the RAW sextant (pre-correction) so the offset matches
+         * the geometry that produced it. Correction magnitudes are small
+         * (<10°) and the boundaries are 30°/90°/150°... so a correction
+         * never pushes the result across a sextant boundary except at the
+         * 90° case (3oc, α=89.9° post-correction stays s=1 by lroundf). */
+        int raw_sextant = azimuth_to_sextant(alpha_deg);
+        alpha_deg += s_sextant_offset[raw_sextant];
+        if (alpha_deg <    0.0f) alpha_deg += 360.0f;
+        if (alpha_deg >= 360.0f) alpha_deg -= 360.0f;
+
         out->azimuth_deg = alpha_deg;
         out->sextant     = azimuth_to_sextant(alpha_deg);
         out->mode        = DOA_MODE_3MIC;

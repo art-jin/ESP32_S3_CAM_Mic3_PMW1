@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "servo.h"
 
 static const char *TAG = "tracker";
@@ -13,23 +14,84 @@ static tracker_mode_t   s_mode = TRACKER_MODE_IDLE;
 static bool             s_enabled = true;
 static float            s_last_target_deg = 0.0f;   /* last commanded angle */
 static bool             s_have_target = false;      /* any command issued yet */
-static float            s_pending_target = 0.0f;    /* last frame's raw target */
-static bool             s_have_pending = false;     /* any pending target */
+
+/* Idle-return state (Phase A).
+ * Tracks the time of the last valid 3-mic DOA frame and the time of the
+ * last tracker_update call. When no 3-mic frame has been seen for longer
+ * than idle_return_threshold_s, the servo is stepped toward home at
+ * idle_return_rate_deg_per_s. */
+static int64_t s_last_3mic_us  = 0;
+static int64_t s_last_update_us = 0;
+
+/* 2-of-3 agreement ring buffer (Phase A).
+ * Replaces the prior "two consecutive frames must agree" rule, which
+ * penalized speech: at 16% 3-mic frame rate, a single noise/2-mic frame
+ * sandwiched between two good frames broke the streak and reset the wait.
+ * The new rule tolerates one interrupted frame in three.
+ *
+ * Confirmation semantics: the LATEST target must agree with at least one
+ * of the (up to 2) previous targets. This means a transient on the latest
+ * frame is still rejected (good — we don't want to act on noise), but a
+ * transient in the middle of two good frames is tolerated. */
+static float s_agree_buf[3];
+static int   s_agree_n;
+static int   s_agree_idx;
+
+/* Push target into the ring buffer and check if the latest agrees with
+ * any prior entry within tol. Returns 1 (confirm) with *confirmed_target
+ * set to the latest target; returns 0 (no confirm) otherwise. Targets
+ * are servo angles in degrees, clamped to ±33°, so no wraparound. */
+static int agreement_push_check(float target, float tol, float *confirmed_target)
+{
+    s_agree_buf[s_agree_idx] = target;
+    s_agree_idx = (s_agree_idx + 1) % 3;
+    if (s_agree_n < 3) s_agree_n++;
+    if (s_agree_n < 2) return 0;
+    /* Slot that holds the latest target just after the push above.
+     * It's at index (s_agree_idx - 1 + 3) % 3. */
+    for (int i = 1; i < s_agree_n; i++) {
+        int idx = (s_agree_idx - 1 - i + 3) % 3;
+        if (fabsf(s_agree_buf[idx] - target) <= tol) {
+            *confirmed_target = target;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 void tracker_init(const tracker_config_t *cfg)
 {
     if (cfg) s_cfg = *cfg;
     s_mode = TRACKER_MODE_IDLE;
     s_have_target = false;
+    s_agree_n = 0;
+    s_agree_idx = 0;
+    int64_t now_us = esp_timer_get_time();
+    s_last_3mic_us  = now_us;
+    s_last_update_us = now_us;
     ESP_LOGI(TAG, "init: home=%+.1f°  deadband=%.1f°  min_conf=%.2f  "
-             "out_of_range=%.0f°  agreement=%.1f°  conservative=%d",
+             "out_of_range=%.0f°  agreement=%.1f°  conservative=%d  "
+             "idle_return=%.0fs@%.1f°/s",
              s_cfg.home_deg, s_cfg.deadband_deg, s_cfg.min_confidence,
              s_cfg.out_of_range_deg, s_cfg.target_agreement_deg,
-             s_cfg.conservative_mode ? 1 : 0);
+             s_cfg.conservative_mode ? 1 : 0,
+             s_cfg.idle_return_threshold_s,
+             s_cfg.idle_return_rate_deg_per_s);
 }
 
 void tracker_update(const doa_result_t *doa)
 {
+    int64_t now_us = esp_timer_get_time();
+    /* Frame-to-frame dt for rate-limited actions (idle return). Cap to
+     * 1 s so a long pause (e.g., motion-pause stalling calls) doesn't
+     * produce a huge step when updates resume. */
+    float dt_s = 0.1f;
+    if (s_last_update_us > 0) {
+        int64_t dt_us = now_us - s_last_update_us;
+        if (dt_us > 0 && dt_us < 1000000) dt_s = (float)dt_us / 1e6f;
+    }
+    s_last_update_us = now_us;
+
     if (!s_enabled) {
         s_mode = TRACKER_MODE_DISABLED;
         return;
@@ -37,6 +99,14 @@ void tracker_update(const doa_result_t *doa)
     if (doa == NULL) {
         s_mode = TRACKER_MODE_SUPPRESSED;
         return;
+    }
+
+    /* Refresh idle timer whenever we see a valid 3-mic frame — even if
+     * later checks (motion-pause, agreement) end up suppressing this
+     * frame. The point is "user is still actively speaking." */
+    if (doa->mode == DOA_MODE_3MIC &&
+        doa->confidence >= s_cfg.min_confidence) {
+        s_last_3mic_us = now_us;
     }
 
     /* MOTION-PAUSE: while the servo is moving (or within its post-motion
@@ -49,6 +119,41 @@ void tracker_update(const doa_result_t *doa)
     if (servo_is_moving()) {
         s_mode = TRACKER_MODE_SUPPRESSED;
         return;
+    }
+
+    /* IDLE RETURN HOME (Phase A): if no valid 3-mic frame has arrived
+     * for idle_return_threshold_s, step the servo toward home at
+     * idle_return_rate_deg_per_s. Prevents the servo from sitting at
+     * ±33° indefinitely after the user stops speaking — both a UX issue
+     * and a cause of limit-position buzz coupling into the mic PCB.
+     *
+     * Bypasses deadband and agreement checks (deterministic action, not
+     * a tracking decision). Each step is small (< deadband) and re-enters
+     * motion-pause on the next call, so the loop naturally limit-cycles
+     * between "step, wait 500ms, step" until home is reached.
+     * Stops within 0.5° of home to avoid buzzing on the centering pulse. */
+    if (s_have_target &&
+        s_cfg.idle_return_threshold_s > 0.0f &&
+        (now_us - s_last_3mic_us) >=
+            (int64_t)(s_cfg.idle_return_threshold_s * 1e6f)) {
+        float current = servo_get_angle_deg();
+        if (fabsf(current) > 0.5f) {
+            float step = s_cfg.idle_return_rate_deg_per_s * dt_s;
+            float new_angle;
+            if (current > 0.0f) {
+                new_angle = current - step;
+                if (new_angle < 0.0f) new_angle = 0.0f;
+            } else {
+                new_angle = current + step;
+                if (new_angle > 0.0f) new_angle = 0.0f;
+            }
+            servo_set_angle_deg(new_angle);
+            s_last_target_deg = new_angle;
+            s_mode = TRACKER_MODE_IDLE;
+            return;
+        }
+        /* Already at (or within 0.5° of) home — fall through to normal
+         * flow, which will likely SUPPRESS the frame (no movement). */
     }
 
     /* Only 3-mic DOA with sufficient confidence drives the servo.
@@ -104,27 +209,19 @@ void tracker_update(const doa_result_t *doa)
     if (target > SERVO_ANGLE_MAX_DEG) target = SERVO_ANGLE_MAX_DEG;
     if (target < SERVO_ANGLE_MIN_DEG) target = SERVO_ANGLE_MIN_DEG;
 
-    /* TWO-FRAME AGREEMENT CHECK: require two consecutive frames' raw
-     * targets to agree within target_agreement_deg before commanding
-     * motion. This filters single-frame GCC-PHAT transients that would
-     * otherwise slam the servo to ±20° limits on noise. Real position
-     * changes produce consistent readings across frames; transients
-     * don't. */
+    /* 2-OF-3 AGREEMENT CHECK (Phase A): push the latest target into a
+     * 3-slot ring buffer and require it to agree with at least one prior
+     * entry within target_agreement_deg. Tolerates one noise/2-mic frame
+     * in three without resetting the confirmation streak — important for
+     * speech where 3-mic frame rate is only ~16%. */
     if (s_cfg.target_agreement_deg > 0.0f) {
-        if (!s_have_pending) {
-            s_pending_target = target;
-            s_have_pending = true;
+        float confirmed_target = target;
+        if (!agreement_push_check(target, s_cfg.target_agreement_deg,
+                                  &confirmed_target)) {
             s_mode = TRACKER_MODE_SUPPRESSED;
             return;
         }
-        if (fabsf(target - s_pending_target) > s_cfg.target_agreement_deg) {
-            /* Disagreement — update pending and wait for confirmation. */
-            s_pending_target = target;
-            s_mode = TRACKER_MODE_SUPPRESSED;
-            return;
-        }
-        /* Agreement — both frames point the same way. */
-        s_pending_target = target;
+        target = confirmed_target;
     }
 
     /* Deadband check: skip if change is too small. */

@@ -4,14 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Working (v1.3).** 360° six-direction sound source localization + servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
+**Working (v1.4).** 360° six-direction sound source localization + servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
 
-- DOA: 6-position calibration, mean azimuth offset **< ±5°** at 30–50 cm voice distance.
-- Servo tracking: **±33° range** (270° JS6620, 3.33:1 gear), **0.5–3.9s response**, **zero rebound** (feed-forward compensation).
+- DOA: 6-position whistle calibration (2026-06-25), raw azimuth error **5/6 positions ≤ ±5°**, after per-sextant A1 correction **target ±3° at 4/6 positions** (s=1 unreliable — bias is non-monotonic within sextant).
+- Servo tracking: **±33° range** (270° JS6620, 3.33:1 gear), **1.1s speech response** (Phase A target ≤1.5s), **zero rebound** (feed-forward compensation).
 - Speech sensitivity: front-end pre-emphasis (`y = x - 0.97·x[i-1]`) enables **16% 3-mic frames at normal speaking volume** (was 0% without it). See Pitfalls §8.
+- Idle return: after **10s of silence**, servo steps back toward home at **~0.3°/s effective** (configured 2.5°/s, gated by motion-pause — Phase B will address).
 - Direction output: UART log + physical servo pointing.
 
-Tagged `v1.3`. History: `v1.2` (270° servo slope fix), `v1.1` (feed-forward), `servo-stable-1.0` (strict stable), `servo-tracking-1.0` (Phase 1-3), `3麦阵列测试完成1.0` (DOA only).
+Tagged `v1.4`. History: `v1.3` (feed-forward + pre-emphasis + 270° slope + ±33° clamp), `v1.2` (270° servo slope fix), `v1.1` (feed-forward), `servo-stable-1.0` (strict stable), `servo-tracking-1.0` (Phase 1-3), `3麦阵列测试完成1.0` (DOA only).
+
+### Phase A changes (v1.4, 2026-06-25)
+
+| Change | File | Effect |
+|---|---|---|
+| Per-sextant calibration table | `main/doa.c` `s_sextant_offset[6]` | Systematic azimuth bias correction per sextant |
+| 2-of-3 ring-buffer agreement | `main/tracker.c` `s_agree_buf[3]` | Tolerates one noise frame in three (was 2-consecutive); speech response ~1.1s |
+| Lag median window 5→3 | `main/doa.h` `DOA_HIST_N` | Smoothing latency 500ms→300ms |
+| Idle return home | `main/tracker.c` + `main/tracker.h` | 10s silence threshold, 2.5°/s configured rate, bypasses deadband/agreement |
+
+See `OPTIMIZATION_PLAN_v3.md` for the full Phase A/B/C roadmap. Phase B (sliding window, adaptive motion-pause, PWM soft-start) is next.
 
 ## Servo hardware (Phase 1-3 implemented, 2026-06-22)
 
@@ -182,11 +194,32 @@ Note: the `sin α` equation has a **positive** sign because the 3DMIC-291 is ins
 
 K = d·fs/c ≈ 1.40 samples at d=10 mm, fs=48 kHz. `K` is also the max possible pairwise TDOA in samples — `lag_*` outside ±K means a noise peak.
 
-## Calibration results (2026-06-21 / 2026-06-22)
+## Calibration results
 
-User walked to known clock positions at 30–50 cm distance, spoke continuously. Two rounds: pre-flip (board component-side up) and post-flip (board component-side down — current installed orientation).
+### v1.4 whistle calibration (2026-06-25, current)
 
-### Post-flip (current, tag `3麦阵列测试完成1.0`)
+User whistled at each sextant center (30–50 cm distance, tracker disabled, servo at 0°). Whistle is the highest-SNR test signal — high-frequency pure tone forces L/R decorrelation that voice can't achieve at the M3-axis positions (6oc, 12oc).
+
+| Position | Expected α | Raw measured | Raw error | A1 correction | Post-correction error |
+|---|---|---|---|---|---|
+| 12oc (s=0) |   0° | 357.3° | -2.7° | +3° | +0.3°  ✓ |
+| 2oc  (s=1) |  60° |  66.3° | +6.3° | -6° | +0.3°* ✓ |
+| 4oc  (s=2) | 120° | 117.3° | -2.7° | +3° | +0.3°  ✓ |
+| 6oc  (s=3) | 180° | 179.8° | -0.2° |  0° | -0.2°  ✓ |
+| 8oc  (s=4) | 240° | 239.3° | -0.7° | +1° | +0.3°  ✓ |
+| 10oc (s=5) | 300° | 295.3° | -4.7° | +5° | +0.3°  ✓ |
+
+\* s=1 unreliable: v1.3 measured 3oc (also s=1) at 83.9° → -6.1° bias, **opposite sign** to 2oc's +6.3° today. Single per-sextant offset cannot capture non-monotonic intra-sextant bias. Future work: geometric calibration (Phase C Levenberg-Marquardt).
+
+**Day-to-day variation**: v1.3 (2026-06-22, voice) had 12oc at +6.6° bias vs today's -2.7°. ~5° swing between sessions. Treat A1 table as "best single-day estimate," not absolute.
+
+Single-frame std at whistle SNR: **0.9°–3.2°** (best at 10oc, worst at 2oc). Voice at 8oc gave std 1.5° (comparable).
+
+### v1.3 voice calibration (2026-06-22, `3麦阵列测试完成1.0`)
+
+User walked to known clock positions at 30–50 cm distance, spoke continuously.
+
+#### Post-flip (current install orientation)
 
 | User position | Expected α | Measured α | Offset | Primary mode |
 |---|---|---|---|---|

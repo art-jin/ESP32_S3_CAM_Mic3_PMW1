@@ -62,7 +62,11 @@
 #define DOA_MAX_LAG          8
 
 #define DOA_N_PAIRS          3   /* 31, 32, 12 */
-#define DOA_HIST_N           5   /* median-smoothing window, in frames */
+/* Median-smoothing window, in frames. Was 5 (500 ms @ 10 Hz); reduced to 3
+ * (300 ms) in Phase A to lower response latency. Feed-forward compensation
+ * in the tracker provides system-level stability, so per-frame lag smoothing
+ * can be shorter without risking oscillation. */
+#define DOA_HIST_N           3
 
 typedef enum {
     DOA_MODE_INVALID = 0,

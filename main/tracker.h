@@ -52,8 +52,19 @@ typedef struct {
     /* target_agreement_deg: require two consecutive frames' raw targets
      * to agree within this tolerance before commanding motion. Filters
      * out single-frame GCC-PHAT transients (e.g., servo-motor buzz
-     * leaking through the motion-pause window). 0 disables the check. */
+     * leaking through the motion-pause window). 0 disables the check.
+     * (Phase A: replaced by 2-of-3 ring-buffer check in tracker.c.) */
     float    target_agreement_deg;
+    /* idle_return_threshold_s: if no valid 3-mic DOA frame is seen for
+     * this many seconds, slowly return the servo to home (0°). Prevents
+     * the servo from sitting at ±33° indefinitely after the user stops
+     * speaking — both a UX issue and a cause of limit-position buzz that
+     * couples into the mic PCB. 0 disables. */
+    float    idle_return_threshold_s;
+    /* idle_return_rate_deg_per_s: how fast to return to home during idle.
+     * Slow (2-3°/s) avoids startling the user and keeps motion-pause
+     * intervals short so DOA recovers quickly if speech resumes. */
+    float    idle_return_rate_deg_per_s;
 } tracker_config_t;
 
 #define TRACKER_DEFAULT_CONFIG  { \
@@ -63,6 +74,8 @@ typedef struct {
     .conservative_mode    = false,   \
     .out_of_range_deg     = 75.0f,   \
     .target_agreement_deg = 5.0f,    \
+    .idle_return_threshold_s    = 10.0f, \
+    .idle_return_rate_deg_per_s = 2.5f,  \
 }
 
 void tracker_init(const tracker_config_t *cfg);
