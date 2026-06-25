@@ -71,10 +71,17 @@ void servo_set_angle_deg(float angle_deg);
  * ring-gear angle; if you need raw servo angle, multiply by 3.33. */
 float servo_get_angle_deg(void);
 
-/* True if the servo was commanded to a new target within the last
- * SERVO_MOTION_HOLDOFF_MS milliseconds. Phase 3 (tracker) uses this to
- * freeze DOA updates during motion + settle, so servo-motor whine doesn't
- * corrupt GCC-PHAT. Phase 1 implementation just returns false if no
- * command has been issued since boot. */
+/* True if the servo was commanded to a new target within the holdoff
+ * window. The tracker uses this to freeze DOA updates during motion +
+ * settle, so servo-motor whine doesn't corrupt GCC-PHAT.
+ *
+ * Phase B2 (2026-06-25): holdoff is now ADAPTIVE based on the magnitude
+ * of the last commanded step:
+ *   |delta| <  5°   →  200 ms
+ *   |delta| < 15°   →  350 ms
+ *   |delta| ≥ 15°   →  500 ms (this constant)
+ * Small idle-return steps no longer trigger the full 500 ms pause, so
+ * idle return rate matches the configured 2.5°/s instead of being
+ * capped at ~0.5°/s by the holdoff. */
 #define SERVO_MOTION_HOLDOFF_MS  500
 bool servo_is_moving(void);

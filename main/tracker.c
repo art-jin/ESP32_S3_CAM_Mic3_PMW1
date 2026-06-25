@@ -82,15 +82,19 @@ void tracker_init(const tracker_config_t *cfg)
 void tracker_update(const doa_result_t *doa)
 {
     int64_t now_us = esp_timer_get_time();
-    /* Frame-to-frame dt for rate-limited actions (idle return). Cap to
-     * 1 s so a long pause (e.g., motion-pause stalling calls) doesn't
-     * produce a huge step when updates resume. */
+    /* dt_s for rate-limited actions (idle return). Computed from the last
+     * time we actually COMMANDED the servo (not the last call) — otherwise
+     * motion-pause frames would shrink dt and limit the effective rate to
+     * ~1°/s instead of the configured 2.5°/s. s_last_update_us is updated
+     * only at the servo-command sites below.
+     *
+     * Cap to 1 s so a long pause (no commands issued) doesn't produce a
+     * huge first step when activity resumes. */
     float dt_s = 0.1f;
     if (s_last_update_us > 0) {
         int64_t dt_us = now_us - s_last_update_us;
         if (dt_us > 0 && dt_us < 1000000) dt_s = (float)dt_us / 1e6f;
     }
-    s_last_update_us = now_us;
 
     if (!s_enabled) {
         s_mode = TRACKER_MODE_DISABLED;
@@ -130,7 +134,7 @@ void tracker_update(const doa_result_t *doa)
      * Bypasses deadband and agreement checks (deterministic action, not
      * a tracking decision). Each step is small (< deadband) and re-enters
      * motion-pause on the next call, so the loop naturally limit-cycles
-     * between "step, wait 500ms, step" until home is reached.
+     * between "step, holdoff, step" until home is reached.
      * Stops within 0.5° of home to avoid buzzing on the centering pulse. */
     if (s_have_target &&
         s_cfg.idle_return_threshold_s > 0.0f &&
@@ -149,6 +153,7 @@ void tracker_update(const doa_result_t *doa)
             }
             servo_set_angle_deg(new_angle);
             s_last_target_deg = new_angle;
+            s_last_update_us = now_us;   /* mark command time for next dt */
             s_mode = TRACKER_MODE_IDLE;
             return;
         }
@@ -233,6 +238,7 @@ void tracker_update(const doa_result_t *doa)
     /* Command the servo. */
     servo_set_angle_deg(target);
     s_last_target_deg = target;
+    s_last_update_us = now_us;   /* mark command time for idle-return dt */
     s_have_target = true;
     s_mode = TRACKER_MODE_TRACKING;
 }

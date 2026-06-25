@@ -1,5 +1,7 @@
 #include "servo.h"
 
+#include <math.h>
+
 #include "driver/ledc.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -17,6 +19,7 @@ static const char *TAG = "servo";
 #define SERVO_DUTY_MAX       ((1U << SERVO_DUTY_BITS) - 1)   /* 16383 */
 
 static float    s_target_angle_deg = 0.0f;     /* last commanded, clamped */
+static float    s_last_delta_deg   = 0.0f;     /* magnitude of last commanded step */
 static int64_t  s_last_motion_us   = 0;        /* esp_timer timestamp */
 static bool     s_init_ok          = false;
 
@@ -78,6 +81,8 @@ void servo_set_angle_deg(float angle_deg)
 {
     if (angle_deg > SERVO_ANGLE_MAX_DEG) angle_deg = SERVO_ANGLE_MAX_DEG;
     if (angle_deg < SERVO_ANGLE_MIN_DEG) angle_deg = SERVO_ANGLE_MIN_DEG;
+    /* Track step magnitude for servo_is_moving()'s adaptive holdoff. */
+    s_last_delta_deg = fabsf(angle_deg - s_target_angle_deg);
     s_target_angle_deg = angle_deg;
 
     /* Linear map: angle at disc [-40.5°, +40.5°] → pulse [500, 2500] µs.
@@ -110,5 +115,24 @@ bool servo_is_moving(void)
     if (s_last_motion_us == 0) return false;     /* no motion since boot */
     int64_t now = esp_timer_get_time();
     int64_t elapsed_ms = (now - s_last_motion_us) / 1000;
-    return elapsed_ms < SERVO_MOTION_HOLDOFF_MS;
+    /* ADAPTIVE HOLDOFF (Phase B2): scale pause duration with step size.
+     * Small steps (e.g., idle-return micro-steps of ~0.25°) barely excite
+     * mechanical vibration, so a short 200 ms pause is enough. Large steps
+     * that slam the servo across its range need the full 500 ms to let the
+     * control loop settle and the vibration couple to decay.
+     *
+     * Effect on idle return: previously each micro-step triggered the full
+     * 500 ms pause, capping the effective return rate at ~0.5°/s (one
+     * 0.25° step every 500 ms). With 200 ms pause for small steps, the
+     * rate matches the configured 2.5°/s.
+     *
+     * Thresholds:
+     *   |delta| <  5°   → 200 ms  (small corrections, idle return)
+     *   |delta| < 15°   → 350 ms  (medium tracking motions)
+     *   |delta| ≥ 15°   → 500 ms  (large swings, max settling time) */
+    uint32_t holdoff_ms;
+    if (s_last_delta_deg <  5.0f) holdoff_ms = 200;
+    else if (s_last_delta_deg < 15.0f) holdoff_ms = 350;
+    else                             holdoff_ms = SERVO_MOTION_HOLDOFF_MS;
+    return elapsed_ms < (int64_t)holdoff_ms;
 }
