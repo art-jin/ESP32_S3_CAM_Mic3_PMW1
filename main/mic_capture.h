@@ -31,7 +31,18 @@
 #define MIC_DAT1_GPIO     42
 
 #define MIC_SAMPLE_RATE_HZ   48000
-#define MIC_WINDOW_MS        100
+/* DMA read window. Phase B1 (2026-06-25): reduced from 100ms to 50ms to
+ * double the DOA output rate from 10Hz to 20Hz. doa_process() only uses
+ * the first DOA_FFT_N (1024) samples per channel = 21.3ms, so the rest
+ * of the DMA window was wasted data — shrinking to 50ms still leaves
+ * ample headroom (2400 samples/channel, FFT uses 1024). CPU estimated
+ * ~30% (was ~15%), well within budget.
+ *
+ * Why no sliding-window concat: FFT resolution depends on FFT size and
+ * sample rate (46.9 Hz/bin at 1024/48kHz), NOT on the DMA window size.
+ * So a 50ms window with no overlap gives the same azimuth precision as
+ * a 100ms window — just at 2x the rate. */
+#define MIC_WINDOW_MS        50
 #define MIC_NUM_CHANNELS     3   /* LINE0_L | LINE0_R | LINE1_L */
 #define MIC_WINDOW_BYTES     (MIC_SAMPLE_RATE_HZ * MIC_NUM_CHANNELS * 2 * MIC_WINDOW_MS / 1000)
 #define MIC_WINDOW_SAMPLES   (MIC_WINDOW_BYTES / sizeof(int16_t))
