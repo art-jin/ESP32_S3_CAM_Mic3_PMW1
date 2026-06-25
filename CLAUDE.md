@@ -4,15 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Working (v1.4).** 360° six-direction sound source localization + servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
+**Working (v1.5).** 360° six-direction sound source localization + servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
 
 - DOA: 6-position whistle calibration (2026-06-25), raw azimuth error **5/6 positions ≤ ±5°**, after per-sextant A1 correction **target ±3° at 4/6 positions** (s=1 unreliable — bias is non-monotonic within sextant).
-- Servo tracking: **±33° range** (270° JS6620, 3.33:1 gear), **1.1s speech response** (Phase A target ≤1.5s), **zero rebound** (feed-forward compensation).
+- Frame rate: **16.6 Hz** (DMA window 50 ms, was 9.2 Hz at 100 ms). CPU ~30%.
+- Servo tracking: **±33° range** (270° JS6620, 3.33:1 gear), **1.1s speech response**, **zero rebound** (feed-forward compensation).
+- PWM soft-start: large motions (>3°) stepped at 3°/20 ms via FreeRTOS timer; small motions single-write to preserve idle-return rate.
 - Speech sensitivity: front-end pre-emphasis (`y = x - 0.97·x[i-1]`) enables **16% 3-mic frames at normal speaking volume** (was 0% without it). See Pitfalls §8.
-- Idle return: after **10s of silence**, servo steps back toward home at **~0.3°/s effective** (configured 2.5°/s, gated by motion-pause — Phase B will address).
+- Idle return: after **10 s of silence**, servo steps back toward home at **~2.5°/s effective** (matches configured rate). From +33° to 0° in ~13 s (was ~110 s in v1.4).
+- Adaptive motion-pause: **200/350/500 ms** by step magnitude (<5° / 5-15° / ≥15°).
 - Direction output: UART log + physical servo pointing.
 
-Tagged `v1.4`. History: `v1.3` (feed-forward + pre-emphasis + 270° slope + ±33° clamp), `v1.2` (270° servo slope fix), `v1.1` (feed-forward), `servo-stable-1.0` (strict stable), `servo-tracking-1.0` (Phase 1-3), `3麦阵列测试完成1.0` (DOA only).
+Tagged `v1.5`. History: `v1.4` (Phase A: calibration + 2-of-3 agreement + idle return), `v1.3` (feed-forward + pre-emphasis + 270° slope + ±33° clamp), `v1.2` (270° servo slope fix), `v1.1` (feed-forward), `servo-stable-1.0` (strict stable), `servo-tracking-1.0` (Phase 1-3), `3麦阵列测试完成1.0` (DOA only).
 
 ### Phase A changes (v1.4, 2026-06-25)
 
@@ -23,7 +26,15 @@ Tagged `v1.4`. History: `v1.3` (feed-forward + pre-emphasis + 270° slope + ±33
 | Lag median window 5→3 | `main/doa.h` `DOA_HIST_N` | Smoothing latency 500ms→300ms |
 | Idle return home | `main/tracker.c` + `main/tracker.h` | 10s silence threshold, 2.5°/s configured rate, bypasses deadband/agreement |
 
-See `OPTIMIZATION_PLAN_v3.md` for the full Phase A/B/C roadmap. Phase B (sliding window, adaptive motion-pause, PWM soft-start) is next.
+### Phase B changes (v1.5, 2026-06-25)
+
+| Change | File | Effect |
+|---|---|---|
+| B1: DMA window 100ms→50ms | `main/mic_capture.h` `MIC_WINDOW_MS` | Frame rate 9.2Hz → 16.6Hz; control latency halved |
+| B2: Adaptive motion-pause + dt-from-last-command | `main/servo.c`, `main/tracker.c` | Idle return 0.3°/s → 2.5°/s (8.5× faster); small/large steps use 200/350/500ms holdoff |
+| B3: PWM soft-start | `main/servo.c` `smooth_timer_cb` | Large motions stepped at 3°/20ms via FreeRTOS timer; eliminates mechanical "clack" |
+
+See `OPTIMIZATION_PLAN_v3.md` for the full Phase A/B/C roadmap. Phase C (notch filter, 3-TDOA residual gating, FFT 2048, geometric calibration) is optional and requires empirical data collection.
 
 ## Servo hardware (Phase 1-3 implemented, 2026-06-22)
 
