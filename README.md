@@ -194,4 +194,4 @@ cos α = (lag_01 − 2·lag_02) / (K·√3)
 
 ## 许可
 
-个人学习项目，仅供参考。
+本项目采用 [Apache License 2.0](LICENSE)。
