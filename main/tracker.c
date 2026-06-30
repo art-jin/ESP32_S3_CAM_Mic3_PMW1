@@ -192,7 +192,10 @@ void tracker_update(const doa_result_t *doa)
      * target = α_room - 180 ∈ [-200, 200]. Clamp ±20° takes care of it.
      * The math doesn't need explicit wraparound handling because the
      * clamp rejects anything far from 0 anyway. */
-    float alpha_room_raw = doa->azimuth_deg + servo_get_angle_deg();
+    /* Feed-forward sign: +1 if servo CW → array CW (old board),
+     * -1 if servo CW → array CCW (new board, opposite gear mesh).
+     * Toggle if servo tracks away from user instead of toward. */
+    float alpha_room_raw = doa->azimuth_deg - servo_get_angle_deg();
 
     /* Plausibility check: reject physically impossible jumps (>60° in one
      * 50ms frame). Humans can't move that fast; these are GCC-PHAT noise
