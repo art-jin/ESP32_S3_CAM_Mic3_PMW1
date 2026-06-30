@@ -15,6 +15,11 @@ static bool             s_enabled = true;
 static float            s_last_target_deg = 0.0f;   /* last commanded angle */
 static bool             s_have_target = false;      /* any command issued yet */
 
+/* EMA + plausibility state for α_room smoothing. */
+static float s_sin_ema = 0.0f, s_cos_ema = 0.0f;
+static bool  s_ema_init = false;
+static float s_prev_alpha_room = -1.0f;
+
 /* Idle-return state (Phase A).
  * Tracks the time of the last valid 3-mic DOA frame and the time of the
  * last tracker_update call. When no 3-mic frame has been seen for longer
@@ -64,6 +69,8 @@ void tracker_init(const tracker_config_t *cfg)
     if (cfg) s_cfg = *cfg;
     s_mode = TRACKER_MODE_IDLE;
     s_have_target = false;
+    s_ema_init = false;
+    s_prev_alpha_room = -1.0f;
     s_agree_n = 0;
     s_agree_idx = 0;
     int64_t now_us = esp_timer_get_time();
@@ -185,7 +192,38 @@ void tracker_update(const doa_result_t *doa)
      * target = α_room - 180 ∈ [-200, 200]. Clamp ±20° takes care of it.
      * The math doesn't need explicit wraparound handling because the
      * clamp rejects anything far from 0 anyway. */
-    float alpha_room = doa->azimuth_deg + servo_get_angle_deg();
+    float alpha_room_raw = doa->azimuth_deg + servo_get_angle_deg();
+
+    /* Plausibility check: reject physically impossible jumps (>60° in one
+     * 50ms frame). Humans can't move that fast; these are GCC-PHAT noise
+     * peaks or servo-motion artifacts. */
+    if (s_prev_alpha_room >= 0.0f) {
+        float delta = alpha_room_raw - s_prev_alpha_room;
+        if (delta > 180.0f) delta -= 360.0f;
+        if (delta < -180.0f) delta += 360.0f;
+        if (fabsf(delta) > 60.0f) {
+            s_mode = TRACKER_MODE_SUPPRESSED;
+            return;
+        }
+    }
+    s_prev_alpha_room = alpha_room_raw;
+
+    /* EMA smoothing in sin/cos space (handles 0/360° wraparound correctly).
+     * α=0.3 → ~100ms time constant at 20Hz, attenuates single-frame noise
+     * by 70% while tracking real position changes with <200ms added lag. */
+    float sin_r = sinf(alpha_room_raw * M_PI / 180.0f);
+    float cos_r = cosf(alpha_room_raw * M_PI / 180.0f);
+    if (!s_ema_init) {
+        s_sin_ema = sin_r;
+        s_cos_ema = cos_r;
+        s_ema_init = true;
+    } else {
+        s_sin_ema = 0.7f * s_sin_ema + 0.3f * sin_r;
+        s_cos_ema = 0.7f * s_cos_ema + 0.3f * cos_r;
+    }
+    float alpha_room = atan2f(s_sin_ema, s_cos_ema) * 180.0f / M_PI;
+    if (alpha_room < 0.0f) alpha_room += 360.0f;
+
     float target;
     if (s_cfg.conservative_mode && doa->stable_sextant >= 0) {
         int sextant_center_az = doa->stable_sextant * 60;
@@ -233,6 +271,17 @@ void tracker_update(const doa_result_t *doa)
     if (s_have_target && fabsf(target - s_last_target_deg) < s_cfg.deadband_deg) {
         s_mode = TRACKER_MODE_IDLE;
         return;
+    }
+
+    /* Velocity limit: cap single-frame target change to 15° (= 300°/s at
+     * 20Hz). Matches JS6620's physical speed limit. Prevents jarring
+     * large-angle jumps (e.g., user walks 3oc→7oc = 120° step); the
+     * remainder carries over to subsequent frames naturally. */
+    if (s_have_target) {
+        float diff = target - s_last_target_deg;
+        float max_delta = 15.0f;
+        if (diff > max_delta) target = s_last_target_deg + max_delta;
+        if (diff < -max_delta) target = s_last_target_deg - max_delta;
     }
 
     /* Command the servo. */

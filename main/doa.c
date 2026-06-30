@@ -212,6 +212,20 @@ static void update_stable_sextant(doa_result_t *out)
     }
 }
 
+static float compute_ac_rms(const int16_t *x, int n)
+{
+    if (n == 0) return 0.0f;
+    int64_t sum = 0;
+    for (int i = 0; i < n; i++) sum += x[i];
+    float mean = (float)sum / n;
+    float acc = 0.0f;
+    for (int i = 0; i < n; i++) {
+        float d = (float)x[i] - mean;
+        acc += d * d;
+    }
+    return sqrtf(acc / n);
+}
+
 void doa_process(const int16_t *c0, const int16_t *c1, const int16_t *c2,
                  size_t n_in, doa_result_t *out)
 {
@@ -253,6 +267,18 @@ void doa_process(const int16_t *c0, const int16_t *c1, const int16_t *c2,
     float c1_var = (float)c1_sq_sum / n - c1_mean * c1_mean;
     float cov    = (float)cross_sum / n - c0_mean * c1_mean;
     float c0_ac_rms = (c0_var > 0.0f) ? sqrtf(c0_var) : 0.0f;
+    float c1_ac_rms = (c1_var > 0.0f) ? sqrtf(c1_var) : 0.0f;
+
+    /* VAD gate: if all channels are below noise floor, skip DOA entirely.
+     * Saves ~15ms CPU (3× GCC-PHAT) and prevents noise-driven false DOA. */
+    float c2_ac_rms = compute_ac_rms(c2, n);
+    if (c0_ac_rms < 25.0f && c1_ac_rms < 25.0f && c2_ac_rms < 25.0f) {
+        out->mode = DOA_MODE_INVALID;
+        out->sextant = -1;
+        update_stable_sextant(out);
+        return;
+    }
+
     float corr = 0.0f;
     if (c0_var > 1.0f && c1_var > 1.0f) {
         corr = cov / sqrtf(c0_var * c1_var);
