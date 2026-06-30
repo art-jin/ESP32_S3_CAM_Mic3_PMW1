@@ -70,7 +70,7 @@ typedef struct {
 #define TRACKER_DEFAULT_CONFIG  { \
     .home_deg             = 0.0f,    \
     .deadband_deg         = 3.0f,    \
-    .min_confidence       = 0.45f,   \
+    .min_confidence       = 0.35f,   \
     .conservative_mode    = false,   \
     .out_of_range_deg     = 150.0f,  \
     .target_agreement_deg = 5.0f,    \

@@ -196,12 +196,15 @@ void tracker_update(const doa_result_t *doa)
 
     /* Plausibility check: reject physically impossible jumps (>60° in one
      * 50ms frame). Humans can't move that fast; these are GCC-PHAT noise
-     * peaks or servo-motion artifacts. */
+     * peaks or servo-motion artifacts. On rejection, partially drift
+     * s_prev toward the new reading (30%) to prevent stale-lock where a
+     * single wrong initial reading blocks all subsequent correct ones. */
     if (s_prev_alpha_room >= 0.0f) {
         float delta = alpha_room_raw - s_prev_alpha_room;
         if (delta > 180.0f) delta -= 360.0f;
         if (delta < -180.0f) delta += 360.0f;
         if (fabsf(delta) > 60.0f) {
+            s_prev_alpha_room += delta * 0.3f;  /* drift to prevent stale-lock */
             s_mode = TRACKER_MODE_SUPPRESSED;
             return;
         }

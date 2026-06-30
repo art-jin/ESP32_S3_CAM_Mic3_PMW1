@@ -103,7 +103,7 @@ typedef struct {
  *     since the 3-mic math uses both.
  *   - 2-mic fallback only uses peak_02.
  * Below these the GCC "peak" is most likely a noise artifact. */
-#define DOA_PEAK_THRESH_3MIC  0.40f
+#define DOA_PEAK_THRESH_3MIC  0.35f
 #define DOA_PEAK_THRESH_2MIC  0.30f
 
 /* One-time init: precompute Hann window + twiddle factors. */

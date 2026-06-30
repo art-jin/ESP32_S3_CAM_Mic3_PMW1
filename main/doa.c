@@ -290,7 +290,7 @@ void doa_process(const int16_t *c0, const int16_t *c1, const int16_t *c2,
     int diff_thresh = 25;
     int rms_thresh  = (int)(c0_ac_rms * 0.5f);
     if (rms_thresh > diff_thresh) diff_thresh = rms_thresh;
-    int lr_independent = (same_pct < 95) && (max_diff > diff_thresh) && (corr < 0.95f);
+    int lr_independent = (same_pct < 95) && (max_diff > diff_thresh) && (corr < 0.90f);
     out->lr_independent = lr_independent;
     out->lr_max_diff    = max_diff;
     out->lr_same_pct    = same_pct;
@@ -353,10 +353,13 @@ void doa_process(const int16_t *c0, const int16_t *c1, const int16_t *c2,
      * (so the L/R detector says "independent"), pure-noise frames give
      * weak GCC peaks that produce spurious azimuths. Require both pairs
      * that the 3-mic math actually uses (peak_01 and peak_02) to be
-     * sharp; otherwise fall through to 2-mic. */
+     * sharp. At extreme angles (3oc/9oc), one mic has weak signal so
+     * one peak may be low — require at least ONE to pass (OR not AND).
+     * Downstream EMA + plausibility check filters any noise that leaks
+     * through with a single-good-peak frame. */
     int three_mic_eligible = lr_independent
-                          && (peak_01 >= DOA_PEAK_THRESH_3MIC)
-                          && (peak_02 >= DOA_PEAK_THRESH_3MIC);
+                          && ((peak_01 >= DOA_PEAK_THRESH_3MIC)
+                           || (peak_02 >= DOA_PEAK_THRESH_3MIC));
 
     if (three_mic_eligible) {
         /* ---- 3-mic solve (c0=M2@10oc, c1=M1@2oc, c2=M3@6oc) ----
