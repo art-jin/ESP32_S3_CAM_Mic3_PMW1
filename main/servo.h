@@ -65,6 +65,18 @@ void servo_set_angle_deg(float angle_deg);
  * ring-gear angle; if you need raw servo angle, multiply by 3.33. */
 float servo_get_angle_deg(void);
 
+/* Boot-time sweep: 0 -> +100 -> 0 -> -100 -> 0, ~1200 ms dwell at each
+ * waypoint so the user can visually confirm the home direction and full
+ * range before tracking starts. Ramp runs at 100 deg/s (3x slower than
+ * tracking) for visibility; tracking speed is restored after. Call once
+ * after servo_init(), before starting the mic task. Total ~8.8 s. */
+void servo_boot_sweep(void);
+
+/* Override the smooth-ramp step size (deg per 20 ms timer tick). Default
+ * is SERVO_SMOOTH_STEP_DEG (6 deg = 300 deg/s). Smaller = slower, more
+ * visible motion. Clamped to [0.5, 10]. */
+void servo_set_smooth_step_deg(float deg_per_step);
+
 /* True if the servo was commanded to a new target within the holdoff
  * window. The tracker uses this to freeze DOA updates during motion +
  * settle, so servo-motor whine doesn't corrupt GCC-PHAT.

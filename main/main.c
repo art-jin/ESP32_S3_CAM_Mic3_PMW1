@@ -182,6 +182,7 @@ void app_main(void)
     doa_init();
     ESP_ERROR_CHECK(mic_capture_init());
     ESP_ERROR_CHECK(servo_init());
+    servo_boot_sweep();   /* visual confirmation of home + range before tracking */
     tracker_init(NULL);
 
     /* 8 KB stack covers the FFT scratch (static) + libc math + ESP_LOG. */

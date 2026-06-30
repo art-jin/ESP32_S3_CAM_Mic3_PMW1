@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/timers.h"
 
 static const char *TAG = "servo";
@@ -33,6 +34,7 @@ static const char *TAG = "servo";
 static float    s_target_angle_deg  = 0.0f;   /* goal commanded by tracker */
 static float    s_current_angle_deg = 0.0f;   /* where PWM is now (smoothly catching up) */
 static float    s_last_delta_deg    = 0.0f;   /* magnitude of last commanded step */
+static float    s_smooth_step_deg   = SERVO_SMOOTH_STEP_DEG;  /* runtime ramp speed; boot sweep slows this down */
 static int64_t  s_last_motion_us    = 0;      /* esp_timer timestamp of last PWM write */
 static bool     s_init_ok           = false;
 static TimerHandle_t s_smooth_timer = NULL;
@@ -67,7 +69,7 @@ static void smooth_timer_cb(TimerHandle_t h)
 {
     float diff = s_target_angle_deg - s_current_angle_deg;
     float abs_diff = fabsf(diff);
-    if (abs_diff < SERVO_SMOOTH_STEP_DEG) {
+    if (abs_diff < s_smooth_step_deg) {
         /* Final step: snap to target exactly. */
         s_current_angle_deg = s_target_angle_deg;
         write_pwm_for_angle(s_current_angle_deg);
@@ -76,7 +78,7 @@ static void smooth_timer_cb(TimerHandle_t h)
         return;
     }
     /* One step toward target. */
-    s_current_angle_deg += (diff > 0.0f) ? SERVO_SMOOTH_STEP_DEG : -SERVO_SMOOTH_STEP_DEG;
+    s_current_angle_deg += (diff > 0.0f) ? s_smooth_step_deg : -s_smooth_step_deg;
     write_pwm_for_angle(s_current_angle_deg);
     s_last_motion_us = esp_timer_get_time();
 }
@@ -159,7 +161,7 @@ void servo_set_angle_deg(float angle_deg)
 
     /* For very small steps (< one smooth step), write immediately and
      * skip the timer — saves 20 ms of latency for idle-return micro-steps. */
-    if (s_last_delta_deg < SERVO_SMOOTH_STEP_DEG) {
+    if (s_last_delta_deg < s_smooth_step_deg) {
         s_current_angle_deg = angle_deg;
         write_pwm_for_angle(angle_deg);
         s_last_motion_us = esp_timer_get_time();
@@ -207,4 +209,41 @@ bool servo_is_moving(void)
     else if (s_last_delta_deg < 15.0f) holdoff_ms = 350;
     else                             holdoff_ms = SERVO_MOTION_HOLDOFF_MS;
     return elapsed_ms < (int64_t)holdoff_ms;
+}
+
+void servo_set_smooth_step_deg(float deg_per_step)
+{
+    /* Clamp to sane bounds: 0.5 deg/20ms = 25 deg/s (very slow) to
+     * 10 deg/20ms = 500 deg/s (faster than default, for future use). */
+    if (deg_per_step < 0.5f) deg_per_step = 0.5f;
+    if (deg_per_step > 10.0f) deg_per_step = 10.0f;
+    s_smooth_step_deg = deg_per_step;
+}
+
+void servo_boot_sweep(void)
+{
+    /* Waypoints: start at 0 (already there from servo_init), visit both
+     * mechanical extremes, return to 0. Passing through 0 between the two
+     * extremes gives a clear visual anchor for the home direction. */
+    static const float waypoints[] = { +100.0f, 0.0f, -100.0f, 0.0f };
+    const int n = sizeof(waypoints) / sizeof(waypoints[0]);
+
+    /* Slow the ramp for the sweep so the user can see each motion clearly.
+     * 2.0 deg/20ms = 100 deg/s (3x slower than tracking's 300 deg/s).
+     * 100 deg move takes ~1 s. Restore default before returning so
+     * tracking stays fast. */
+    const float saved_step = s_smooth_step_deg;
+    servo_set_smooth_step_deg(2.0f);
+
+    /* 1000 ms ramp + 1200 ms visual dwell at each waypoint. */
+    const TickType_t step_delay = pdMS_TO_TICKS(2200);
+
+    ESP_LOGI(TAG, "boot sweep: 0 -> +100 -> 0 -> -100 -> 0");
+    for (int i = 0; i < n; i++) {
+        servo_set_angle_deg(waypoints[i]);
+        vTaskDelay(step_delay);
+    }
+    /* Restore tracking-speed ramp. */
+    servo_set_smooth_step_deg(saved_step);
+    ESP_LOGI(TAG, "boot sweep done, home at 0 deg");
 }

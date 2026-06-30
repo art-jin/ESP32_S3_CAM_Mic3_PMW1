@@ -4,18 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Working (v1.6).** 360° six-direction sound source localization + wide-range servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
+**Working (v1.7).** 360° six-direction sound source localization + wide-range servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
 
 - DOA: 6-position whistle calibration (2026-06-25), raw azimuth error **5/6 positions ≤ ±5°**, after per-sextant A1 correction **target ±3° at 4/6 positions** (s=1 unreliable — bias is non-monotonic within sextant).
 - Frame rate: **16.6 Hz** (DMA window 50 ms, was 9.2 Hz at 100 ms). CPU ~30%.
 - Servo tracking: **±100° range** (270° JS6620, **1.333:1 external gear**), covering **~2:40 → 9:20 o'clock** (~200° arc, 55% of full circle). Feed-forward compensation with **bug fix for PWM soft-start** (returns actual ramped position, not commanded target).
-- PWM soft-start: large motions (>3°) stepped at 3°/20 ms via FreeRTOS timer; small motions single-write.
+- PWM soft-start: large motions stepped at 6°/20 ms (=300°/s) via FreeRTOS timer; step size runtime-overridable (`servo_set_smooth_step_deg`); small motions single-write.
+- Boot sweep: on startup, servo tours **0 → +100 → 0 → −100 → 0** at 100°/s with 1.2 s dwells (~8.8 s total) so the user can visually confirm home direction and full range before tracking starts.
 - Speech sensitivity: front-end pre-emphasis (`y = x - 0.97·x[i-1]`) enables **16% 3-mic frames at normal speaking volume**.
 - Idle return: after **10 s of silence**, servo steps back toward home at **~2.5°/s effective**.
 - Adaptive motion-pause: **200/350/500 ms** by step magnitude (<5° / 5-15° / ≥15°).
 - Direction output: UART log + physical servo pointing.
 
-Tagged `v1.6`. History: `v1.5` (50T internal gear, Phase B), `v1.4` (Phase A: calibration + 2-of-3 agreement + idle return), `v1.3` (feed-forward + pre-emphasis + 270° slope), `v1.2` (270° servo slope fix), `v1.1` (feed-forward), `servo-stable-1.0`, `servo-tracking-1.0`, `3麦阵列测试完成1.0`, `gear-15T-inner-50T-final` (old gear tagged before swap).
+Tagged `v1.7`. History: `v1.6` (20T external gear + feed-forward bug fix), `v1.5` (50T internal gear, Phase B), `v1.4` (Phase A: calibration + 2-of-3 agreement + idle return), `v1.3` (feed-forward + pre-emphasis + 270° slope), `v1.2` (270° servo slope fix), `v1.1` (feed-forward), `servo-stable-1.0`, `servo-tracking-1.0`, `3麦阵列测试完成1.0`, `gear-15T-inner-50T-final` (old gear tagged before swap).
 
 ### Phase A changes (v1.4, 2026-06-25)
 
@@ -44,6 +45,13 @@ Tagged `v1.6`. History: `v1.5` (50T internal gear, Phase B), `v1.4` (Phase A: ca
 | out_of_range 75° → 150° | `tracker.h` | Allow tracking to clamp instead of suppressing far sources |
 | SERVO_SHAFT_INSTALLED_DOWN 1 → 0 | `servo.h` | External mesh reverses direction; shaft-down + external = double inversion cancels |
 | **Bug fix: servo_get_angle_deg()** | `servo.c` | Returns `s_current_angle_deg` (actual ramped position) not `s_target_angle_deg` (commanded). Fixes feed-forward positive feedback during soft-start ramp. |
+
+### Boot sweep (v1.7, 2026-06-30)
+
+| Change | File | Effect |
+|---|---|---|
+| Boot sweep on startup | `main.c` (calls `servo_boot_sweep()`), `servo.c` | Servo tours 0 → +100 → 0 → −100 → 0 before tracking starts; ~8.8 s total (100°/s ramp + 1.2 s dwell per waypoint). Lets user visually confirm home direction + full range each power-on. |
+| Runtime-overridable ramp step | `servo.c` `s_smooth_step_deg` + `servo_set_smooth_step_deg()` | Sweep slows ramp to 2°/20 ms (=100°/s) for visibility, restores 6°/20 ms (=300°/s) before tracking starts. Tracking speed unaffected. |
 
 ## Servo hardware (v1.6, 2026-06-30)
 
