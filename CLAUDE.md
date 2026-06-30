@@ -261,6 +261,38 @@ Single-frame azimuth noise ≈ ±15° at voice SNR; the **`stable_sextant` field
 | 12 o'clock    |   0° |   6.6° | +6.6° |
 | 3 o'clock     |  90° | 106.4° | +16° |
 
+## Environmental limitations
+
+### Effective tracking distance
+
+The 3DMIC-291 has **10 mm mic spacing**, giving K = d·fs/c = **1.4 samples** of max TDOA. Extracting reliable direction from such a small inter-mic delay requires **high SNR**, which limits the effective range for speech.
+
+The detection threshold is AC RMS ≥ 50 LSB (post pre-emphasis). Below this, ρ01 stays >0.95 (L/R collapse) and GCC-PHAT peaks fall below 0.40 — no 3-mic localization.
+
+Measured and extrapolated from calibration data (inverse-square law):
+
+| Source type | Reliable tracking (>10% 3-mic) | Occasional trigger (>0%) | No response |
+|---|---|---|---|
+| **Whistle** | ~2–3 m | ~4–5 m | >5 m |
+| **Loud speech** (phone volume) | ~1–1.5 m | ~2 m | >2 m |
+| **Normal speech** (conversation) | ~30–50 cm | ~80 cm–1 m | >1 m |
+| **Quiet speech** | <30 cm | ~30 cm | >30 cm |
+
+**Root cause**: 10 mm spacing is designed for close-range interaction (AR1105 DSP companion module). At 1+ m distance, speech energy drops below the threshold where 1.4-sample TDOA can be reliably extracted by GCC-PHAT on a general-purpose MCU.
+
+**Comparison with commercial far-field arrays**:
+- Apple HomePod / Amazon Echo: 40–80 mm spacing, K = 5.6–11 samples, effective 3–5 m
+- AR1105 dedicated DSP (3DMIC-291's original target): same 10 mm but hardware TDOA extraction
+- This project: 10 mm + software GCC-PHAT, limited to close-range
+
+**Practical use case**: desktop interactive device at 30–50 cm. Not suitable for room-level far-field pickup.
+
+**Path to longer range** (all require hardware changes):
+- Larger mic spacing (40+ mm) — needs custom PCB
+- More mics (4–6) for spatial diversity — needs more I²S channels
+- Higher sample rate (96 kHz) — PDM2PCM may not support
+- Dedicated DSP (AR1105) — platform change
+
 ## Pitfalls encountered (and how they were fixed)
 
 ### 1. GCC-PHAT sign convention
