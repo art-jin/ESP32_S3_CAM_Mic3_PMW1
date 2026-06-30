@@ -27,7 +27,7 @@ static const char *TAG = "servo";
  *   PERIOD_MS   — timer fires every 20 ms = one PWM period at 50 Hz.
  *                 The LEDC peripheral latches duty at period boundaries,
  *                 so calling faster than this just wastes CPU. */
-#define SERVO_SMOOTH_STEP_DEG    3.0f
+#define SERVO_SMOOTH_STEP_DEG    6.0f
 #define SERVO_SMOOTH_PERIOD_MS   20
 
 static float    s_target_angle_deg  = 0.0f;   /* goal commanded by tracker */

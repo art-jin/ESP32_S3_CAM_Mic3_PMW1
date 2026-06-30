@@ -77,5 +77,5 @@ float servo_get_angle_deg(void);
  * Small idle-return steps no longer trigger the full 500 ms pause, so
  * idle return rate matches the configured 2.5°/s instead of being
  * capped at ~0.5°/s by the holdoff. */
-#define SERVO_MOTION_HOLDOFF_MS  500
+#define SERVO_MOTION_HOLDOFF_MS  300
 bool servo_is_moving(void);
