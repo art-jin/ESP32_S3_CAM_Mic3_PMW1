@@ -84,3 +84,9 @@ Desktop.ini
 
 # Local-only docs (user said not for GitHub)
 ArthurReadMe.md
+main/i2c_scan.c
+main/oled.c
+main/oled.h
+main/tft.c
+main/tft.h
+ESP32-S3CAM.pdf

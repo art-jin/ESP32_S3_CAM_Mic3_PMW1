@@ -7,7 +7,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "console.h"
 #include "doa.h"
 #include "mic_capture.h"
 #include "servo.h"
@@ -164,6 +163,10 @@ static void mic_task(void *arg)
                 servo_get_angle_deg(), servo_is_moving() ? "[MOTION]" : "",
                 tmode);
         }
+
+        /* Display update removed — TFT SPI uses GPIO 19/20 which conflicts
+         * with USB-CDC. Will need WiFi-based display or alternative pins. */
+
         taskYIELD();
     }
 }
@@ -180,7 +183,6 @@ void app_main(void)
     ESP_ERROR_CHECK(mic_capture_init());
     ESP_ERROR_CHECK(servo_init());
     tracker_init(NULL);
-    console_init();
 
     /* 8 KB stack covers the FFT scratch (static) + libc math + ESP_LOG. */
     xTaskCreate(mic_task, "mic", 8192, NULL,
