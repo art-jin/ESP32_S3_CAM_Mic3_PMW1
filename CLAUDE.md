@@ -4,18 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Working (v1.5).** 360° six-direction sound source localization + servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
+**Working (v1.6).** 360° six-direction sound source localization + wide-range servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
 
 - DOA: 6-position whistle calibration (2026-06-25), raw azimuth error **5/6 positions ≤ ±5°**, after per-sextant A1 correction **target ±3° at 4/6 positions** (s=1 unreliable — bias is non-monotonic within sextant).
 - Frame rate: **16.6 Hz** (DMA window 50 ms, was 9.2 Hz at 100 ms). CPU ~30%.
-- Servo tracking: **±33° range** (270° JS6620, 3.33:1 gear), **1.1s speech response**, **zero rebound** (feed-forward compensation).
-- PWM soft-start: large motions (>3°) stepped at 3°/20 ms via FreeRTOS timer; small motions single-write to preserve idle-return rate.
-- Speech sensitivity: front-end pre-emphasis (`y = x - 0.97·x[i-1]`) enables **16% 3-mic frames at normal speaking volume** (was 0% without it). See Pitfalls §8.
-- Idle return: after **10 s of silence**, servo steps back toward home at **~2.5°/s effective** (matches configured rate). From +33° to 0° in ~13 s (was ~110 s in v1.4).
+- Servo tracking: **±100° range** (270° JS6620, **1.333:1 external gear**), covering **~2:40 → 9:20 o'clock** (~200° arc, 55% of full circle). Feed-forward compensation with **bug fix for PWM soft-start** (returns actual ramped position, not commanded target).
+- PWM soft-start: large motions (>3°) stepped at 3°/20 ms via FreeRTOS timer; small motions single-write.
+- Speech sensitivity: front-end pre-emphasis (`y = x - 0.97·x[i-1]`) enables **16% 3-mic frames at normal speaking volume**.
+- Idle return: after **10 s of silence**, servo steps back toward home at **~2.5°/s effective**.
 - Adaptive motion-pause: **200/350/500 ms** by step magnitude (<5° / 5-15° / ≥15°).
 - Direction output: UART log + physical servo pointing.
 
-Tagged `v1.5`. History: `v1.4` (Phase A: calibration + 2-of-3 agreement + idle return), `v1.3` (feed-forward + pre-emphasis + 270° slope + ±33° clamp), `v1.2` (270° servo slope fix), `v1.1` (feed-forward), `servo-stable-1.0` (strict stable), `servo-tracking-1.0` (Phase 1-3), `3麦阵列测试完成1.0` (DOA only).
+Tagged `v1.6`. History: `v1.5` (50T internal gear, Phase B), `v1.4` (Phase A: calibration + 2-of-3 agreement + idle return), `v1.3` (feed-forward + pre-emphasis + 270° slope), `v1.2` (270° servo slope fix), `v1.1` (feed-forward), `servo-stable-1.0`, `servo-tracking-1.0`, `3麦阵列测试完成1.0`, `gear-15T-inner-50T-final` (old gear tagged before swap).
 
 ### Phase A changes (v1.4, 2026-06-25)
 
@@ -34,35 +34,44 @@ Tagged `v1.5`. History: `v1.4` (Phase A: calibration + 2-of-3 agreement + idle r
 | B2: Adaptive motion-pause + dt-from-last-command | `main/servo.c`, `main/tracker.c` | Idle return 0.3°/s → 2.5°/s (8.5× faster); small/large steps use 200/350/500ms holdoff |
 | B3: PWM soft-start | `main/servo.c` `smooth_timer_cb` | Large motions stepped at 3°/20ms via FreeRTOS timer; eliminates mechanical "clack" |
 
-See `OPTIMIZATION_PLAN_v3.md` for the full Phase A/B/C roadmap. Phase C (notch filter, 3-TDOA residual gating, FFT 2048, geometric calibration) is optional and requires empirical data collection.
+### Gear change (v1.6, 2026-06-30)
 
-## Servo hardware (Phase 1-3 implemented, 2026-06-22)
+| Change | File | Effect |
+|---|---|---|
+| 50T internal ring → 20T external spur gear | `servo.h`, `servo.c` | Reduction 3.33:1 → 1.333:1; disc travel 81° → 202.5° |
+| Slope 2000/81 → 2000/202.5 | `servo.c` | Correct µs/° for new gear ratio |
+| Clamp ±33° → ±100° | `servo.h` `SERVO_ANGLE_MIN/MAX_DEG` | Coverage from 1h20m to **~5h20m of clock arc** |
+| out_of_range 75° → 150° | `tracker.h` | Allow tracking to clamp instead of suppressing far sources |
+| SERVO_SHAFT_INSTALLED_DOWN 1 → 0 | `servo.h` | External mesh reverses direction; shaft-down + external = double inversion cancels |
+| **Bug fix: servo_get_angle_deg()** | `servo.c` | Returns `s_current_angle_deg` (actual ramped position) not `s_target_angle_deg` (commanded). Fixes feed-forward positive feedback during soft-start ramp. |
+
+## Servo hardware (v1.6, 2026-06-30)
 
 | Component | Spec |
 |---|---|
-| Servo model | JS6620 (**270°** rotation hobby PWM servo, not the typical 180°) |
+| Servo model | JS6620 (**270°** rotation hobby PWM servo) |
 | PWM signal | GPIO38, LEDC 50 Hz, pulse 500–2500 µs |
 | Servo shaft orientation | Points **down** (away from mic array) |
-| Drive gear (on servo shaft) | 15 teeth, external |
-| Driven gear (disc) | 50 teeth, **internal** (teeth face inward) — ring gear |
-| Gear mesh style | Pinion runs inside ring (internal mesh, same rotation direction) |
-| Reduction ratio | 50 / 15 = **3.33 : 1** (servo rotates 3.33× for disc to rotate 1×) |
-| Disc coverage for 270° servo travel | 270° / 3.33 = **~81°** of arc |
-| Mechanical limit at disc | **±40.5°** |
-| Soft clamp | **±33°** (7.5° safety margin below ±40.5° mechanical limit) |
-| Disc mounting position | 12 cm below the mic array, at the 12 o'clock direction |
+| Drive gear (on servo shaft) | 15 teeth, external spur |
+| Driven gear | 20 teeth, external spur (center gear) |
+| Gear mesh style | **External mesh** (pinion outside spur gear, opposite rotation direction) |
+| Reduction ratio | 20 / 15 = **1.333 : 1** (servo rotates 1.333× for gear to rotate 1×) |
+| Gear coverage for 270° servo travel | 270° / 1.333 = **~202.5°** of arc |
+| Mechanical limit at gear | **±101.25°** |
+| Soft clamp | **±100°** (1.25° safety margin) |
+| Gimbal mounting | 12 cm below mic array, at 12 o'clock direction |
 
-### Performance (v1.2, 270° servo slope + feed-forward)
+### Performance (v1.6, 20T external gear + bug fix)
 
-| Test | Result |
-|---|---|
-| 6oc user, 12s capture | swing = 0.0° (perfectly stable) |
-| 6oc → 7oc transition | first motion at **0.5s**, servo → **+30°** |
-| 6oc → 5oc transition | first motion at **3.9s**, servo → **-30°** |
-| 7oc long-term | swing = 0.0°, zero rebound |
-| 3oc/9oc (out of range) | suppressed, servo holds last position |
+| User position | Expected target | Measured servo | Offset | Status |
+|---|---|---|---|---|
+| 3 o'clock | -90° | -86° | +4° | ✓ tracked |
+| 5 o'clock | -30° | -28° | +2° | ✓ perfectly stable |
+| 7 o'clock | +30° | +30° | 0° | ✓ perfectly stable |
+| 10 o'clock | +120°→clamp | +100° | clamp | ✓ at limit, stable |
 
-v1.1 → v1.2 improvement came from correcting the pulse-to-angle slope (code assumed 180° servo, JS6620 is actually 270° per spec). This made the 5oc and 7oc cases symmetric — the v1.1 asymmetry was a slope bug, not a geometric property.
+**Actual coverage**: ~2:40 → 9:20 o'clock (±100° from 6oc home, ~200° arc).
+Previous (50T internal gear, v1.5): 4:54 → 7:06 o'clock (±33°, ~66° arc).
 
 ### Tracking pipeline
 
@@ -70,12 +79,12 @@ v1.1 → v1.2 improvement came from correcting the pulse-to-angle slope (code as
 I²S DMA → doa_process → tracker_update → servo_set_angle → LEDC PWM → GPIO38
                               │
                               ▼
-                  Motion-pause gate (500ms holdoff)
-                  Out-of-range gate  (|target| > 45° → suppress)
-                  2-frame agreement (within 5° across consecutive frames)
-                  FEED-FORWARD       (α_room = α_array + β_servo, see §6)
+                  Motion-pause gate (200/350/500ms adaptive)
+                  Out-of-range gate  (|target| > 150° → suppress)
+                  2-of-3 agreement  (within 5° across 3-frame ring buffer)
+                  FEED-FORWARD       (α_room = α_array + β_servo_actual, see §6)
                   Deadband           (skip if Δtarget < 3°)
-                  Clamp              (±20°)
+                  Clamp              (±100°)
 ```
 
 ### Phase 4 limitation: UART console

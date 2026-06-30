@@ -8,21 +8,15 @@
 /* JS6620 hobby servo driver via LEDC PWM.
  *
  * Hardware: see CLAUDE.md "Servo hardware".
- *   - JS6620 is a **270°** rotation servo (not the typical 180°)
+ *   - JS6620 is a **270°** rotation servo
  *   - GPIO 38, 50 Hz PWM, pulse 500–2500 µs
- *   - Drives a 15-tooth pinion inside a 50-tooth internal-mesh ring gear
- *   - Reduction 50/15 = 3.33 : 1 → 270° servo travel = ~81° ring travel
- *   - Therefore the mechanical ANGLE range at the ring gear is ±40.5°
- *   - We clamp to ±30° (safety margin below ±40.5° mechanical limit,
- *     also leaves room for the feed-forward tracker to maneuver without
- *     saturating the clamp)
+ *   - 15T pinion on servo shaft, meshing EXTERNALLY with 20T spur gear
+ *   - External mesh: pinion and gear rotate in OPPOSITE directions
+ *   - Reduction 20/15 = 1.333 : 1 → 270° servo = ~202.5° gear travel
+ *   - Mechanical limit at gear: ±101.25°
+ *   - Soft clamp: ±100° (1.25° safety margin)
  *
- * Angle sign convention: looking down at the gimbal from above the array,
- * positive angle = clockwise rotation of the ring gear (and the mic array
- * mounted on it). 0° = home (servo centered at 1500 µs).
- *
- * This is the pure driver layer — no tracking logic, no motion-pause. The
- * tracker module sits on top. */
+ * Angle sign convention: looking down from above, positive angle = CW. */
 
 #define SERVO_GPIO             38
 
@@ -34,26 +28,26 @@
 #define SERVO_PULSE_CENTER_US  1500
 #define SERVO_PULSE_MAX_US     2500
 
-/* Mechanical limits at the ring gear (clamp range).
- * True mechanical limit is ±40.5° (270° servo travel / 3.33 reduction).
- * Clamped to ±33° — leaves a 7.5° safety margin below the mechanical
- * limit, stays well within the feed-forward tracker's stable region.
- * Tuned 2026-06-22 to maximize usable arc while keeping margin. */
-#define SERVO_ANGLE_MIN_DEG    (-33.0f)
-#define SERVO_ANGLE_MAX_DEG    (+33.0f)
+/* Mechanical limits at the gear output.
+ * True mechanical limit: ±101.25° (270° servo / 1.333 reduction).
+ * Clamped to ±100° for 1.25° safety margin.
+ * Coverage from 6oc home: ~2:40 to ~9:20 o'clock. */
+#define SERVO_ANGLE_MIN_DEG    (-100.0f)
+#define SERVO_ANGLE_MAX_DEG    (+100.0f)
 
 /* Servo shaft orientation switch.
  *
- * The JS6620 is installed shaft-down in the current gimbal. Empirical
- * testing (2026-06-22): with SERVO_SHAFT_INSTALLED_DOWN=1, a positive
- * servo command produces CW rotation of the array viewed from above
- * (M3 at 6oc moves toward 7oc). This matches the tracker's intent
- * (positive target = rotate array CW from above to bring M3 toward
- * a source at α > 180°).
+ * Current config (15T/20T external mesh, shaft-down):
+ * SERVO_SHAFT_INSTALLED_DOWN = 0 (no negation needed)
  *
- * Set to 0 if the servo is reinstalled shaft-up, or if the array ends
- * up rotating the wrong way (servo = +20° moves M3 to 5oc instead of 7oc). */
-#define SERVO_SHAFT_INSTALLED_DOWN  1
+ * External mesh reverses direction relative to internal mesh.
+ * With shaft-down + external mesh, the two direction inversions
+ * (shaft flip + gear reversal) cancel out, so no negation needed.
+ *
+ * Verified 2026-06-30: user at 7oc → servo +30°, M3 toward 7oc ✓
+ *
+ * Old config (15T/50T internal mesh): was =1. */
+#define SERVO_SHAFT_INSTALLED_DOWN  0
 
 esp_err_t servo_init(void);
 

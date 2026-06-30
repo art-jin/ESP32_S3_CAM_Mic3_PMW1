@@ -42,11 +42,11 @@ static TimerHandle_t s_smooth_timer = NULL;
 static void write_pwm_for_angle(float angle_deg)
 {
     if (!s_init_ok) return;
-    /* Linear map: angle at disc [-40.5°, +40.5°] → pulse [500, 2500] µs.
-     * 270° servo / 3.33 gear reduction = 81° disc travel.
-     * slope = 2000 µs / 81° = 24.69 µs per disc-degree.
-     * Sign: with shaft-down, negate so positive angle means CW from above. */
-    float slope_us_per_deg = 2000.0f / 81.0f;
+    /* Linear map: angle at gear [-101.25°, +101.25°] → pulse [500, 2500] µs.
+     * 270° servo / 1.333 reduction (20T/15T external) = 202.5° travel.
+     * slope = 2000 µs / 202.5° = 9.877 µs per gear-degree.
+     * Sign: external mesh + shaft-down, inversions cancel, no negate. */
+    float slope_us_per_deg = 2000.0f / 202.5f;
 #if SERVO_SHAFT_INSTALLED_DOWN
     slope_us_per_deg = -slope_us_per_deg;
 #endif
@@ -174,12 +174,13 @@ void servo_set_angle_deg(float angle_deg)
 
 float servo_get_angle_deg(void)
 {
-    /* Returns the COMMANDED target, not the in-flight s_current_angle_deg.
-     * Tracker's feed-forward compensation needs the array's eventual
-     * orientation (which equals target once motion completes). During
-     * motion-pause the DOA is suppressed anyway, so the discrepancy
-     * between current and target doesn't reach the tracker. */
-    return s_target_angle_deg;
+    /* Returns the ACTUAL (ramped) position, not the commanded target.
+     * Feed-forward compensation (α_room = α_array + β_servo) needs the
+     * array's TRUE physical orientation. With PWM soft-start, the servo
+     * ramps toward target — returning the target while still ramping
+     * causes α_room to be overestimated, creating positive feedback
+     * that drives the servo to the clamp. */
+    return s_current_angle_deg;
 }
 
 bool servo_is_moving(void)

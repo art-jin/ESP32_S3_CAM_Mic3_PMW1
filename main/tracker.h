@@ -72,7 +72,7 @@ typedef struct {
     .deadband_deg         = 3.0f,    \
     .min_confidence       = 0.45f,   \
     .conservative_mode    = false,   \
-    .out_of_range_deg     = 75.0f,   \
+    .out_of_range_deg     = 150.0f,  \
     .target_agreement_deg = 5.0f,    \
     .idle_return_threshold_s    = 10.0f, \
     .idle_return_rate_deg_per_s = 2.5f,  \
