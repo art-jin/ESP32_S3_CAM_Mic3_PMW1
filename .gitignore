@@ -90,3 +90,4 @@ main/oled.h
 main/tft.c
 main/tft.h
 ESP32-S3CAM.pdf
+REST_API_PLAN.md
