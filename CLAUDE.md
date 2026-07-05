@@ -4,19 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Working (v1.7).** 360° six-direction sound source localization + wide-range servo tracking on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array is implemented and verified.
+**Working (v2.0).** 360° six-direction sound source localization + wide-range servo tracking + **REST API dual-mode control** on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array.
 
 - DOA: 6-position whistle calibration (2026-06-25), raw azimuth error **5/6 positions ≤ ±5°**, after per-sextant A1 correction **target ±3° at 4/6 positions** (s=1 unreliable — bias is non-monotonic within sextant).
-- Frame rate: **16.6 Hz** (DMA window 50 ms, was 9.2 Hz at 100 ms). CPU ~30%.
-- Servo tracking: **±100° range** (270° JS6620, **1.333:1 external gear**), covering **~2:40 → 9:20 o'clock** (~200° arc, 55% of full circle). Feed-forward compensation with **bug fix for PWM soft-start** (returns actual ramped position, not commanded target).
-- PWM soft-start: large motions stepped at 6°/20 ms (=300°/s) via FreeRTOS timer; step size runtime-overridable (`servo_set_smooth_step_deg`); small motions single-write.
-- Boot sweep: on startup, servo tours **0 → +100 → 0 → −100 → 0** at 100°/s with 1.2 s dwells (~8.8 s total) so the user can visually confirm home direction and full range before tracking starts.
-- Speech sensitivity: front-end pre-emphasis (`y = x - 0.97·x[i-1]`) enables **16% 3-mic frames at normal speaking volume**.
-- Idle return: after **10 s of silence**, servo steps back toward home at **~2.5°/s effective**.
-- Adaptive motion-pause: **200/350/500 ms** by step magnitude (<5° / 5-15° / ≥15°).
-- Direction output: UART log + physical servo pointing.
+- Frame rate: **16.6 Hz** (DMA window 50 ms). CPU ~30% (DOA) + ~10% (WiFi+HTTP) = ~40%.
+- Servo tracking: **±100° range** (270° JS6620, **1.333:1 external gear**), covering **~2:40 → 9:20 o'clock** (~200° arc). Feed-forward compensation with PWM soft-start bug fix.
+- **REST API (v2.0)**: WiFi + mDNS + 4 endpoints. Two modes: **track** (auto DOA tracking, default) and **command** (REST-directed servo positioning). See "REST API" section below.
+- Boot sweep: servo tours **0 → +100 → 0 → −100 → 0** (~8.8 s) on startup.
+- Speech sensitivity: front-end pre-emphasis (`y = x - 0.97·x[i-1]`) enables 16% 3-mic frames at normal speaking volume.
+- Idle return: after 10 s of silence, servo steps back toward home at ~2.5°/s.
+- Adaptive motion-pause: 200/350/500 ms by step magnitude.
+- LED indicator (GPIO 48): slow blink = WiFi connecting, steady on = connected.
+- Direction output: UART log + physical servo pointing + **REST API JSON**.
 
-Tagged `v1.7`. History: `v1.6` (20T external gear + feed-forward bug fix), `v1.5` (50T internal gear, Phase B), `v1.4` (Phase A: calibration + 2-of-3 agreement + idle return), `v1.3` (feed-forward + pre-emphasis + 270° slope), `v1.2` (270° servo slope fix), `v1.1` (feed-forward), `servo-stable-1.0`, `servo-tracking-1.0`, `3麦阵列测试完成1.0`, `gear-15T-inner-50T-final` (old gear tagged before swap).
+Tagged `v2.0-rest-api`. History: `v1.7` (calibrate new board, boot sweep), `v1.6` (20T external gear + feed-forward bug fix), `v1.5` (Phase B), `v1.4` (Phase A), `v1.3` (feed-forward + pre-emphasis), `v1.2` (270° servo slope), `v1.1` (feed-forward), `servo-stable-1.0`, `servo-tracking-1.0`, `3麦阵列测试完成1.0`, `gear-15T-inner-50T-final`.
 
 ### Phase A changes (v1.4, 2026-06-25)
 
@@ -85,19 +86,67 @@ Previous (50T internal gear, v1.5): 4:54 → 7:06 o'clock (±33°, ~66° arc).
 
 ```
 I²S DMA → doa_process → tracker_update → servo_set_angle → LEDC PWM → GPIO38
+                │               │
+                ▼               ▼
+          status_update   mode_manager_tick
+          (→ REST API)   (→ command timeout)
                               │
                               ▼
                   Motion-pause gate (200/350/500ms adaptive)
                   Out-of-range gate  (|target| > 150° → suppress)
                   2-of-3 agreement  (within 5° across 3-frame ring buffer)
-                  FEED-FORWARD       (α_room = α_array + β_servo_actual, see §6)
+                  FEED-FORWARD       (α_room = α_array - β_servo_actual)
                   Deadband           (skip if Δtarget < 3°)
                   Clamp              (±100°)
 ```
 
+Note: feed-forward uses **minus** sign (α_array - β_servo) on the current board
+(new board has opposite gear rotation direction from the original board).
+
+## REST API (v2.0, 2026-07-05)
+
+### Dual-mode system
+
+| Mode | Description | Default |
+|---|---|---|
+| **TRACK** | Auto sound-source tracking (DOA → tracker → servo) | ✅ boot default |
+| **COMMAND** | REST-directed servo positioning, tracker disabled | via POST /api/mode |
+
+Mode switching via REST only. Command mode auto-returns to track after 5 min idle.
+
+### Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | /api/ping | ❌ | Heartbeat: `{"ok":true}` |
+| GET | /api/status?device_id=XXXX | ✅ | Full status JSON (mode, servo, DOA, WiFi) |
+| POST | /api/mode?device_id=XXXX | ✅ | Switch mode: `{"mode":"command"}` or `{"mode":"track"}` |
+| POST | /api/point?device_id=XXXX | ✅ | Command servo: `{"dir":"7oc"}` or `{"angle":30}` (command mode only) |
+
+### Device access
+
+- **mDNS**: `http://esp32-mic-<MAC4>.local` (auto-discovered)
+- **Device ID**: `A3K9X2` (compiled in; future: NVS random on first boot)
+- **Device ID exposure**: UART log only. Never in mDNS hostname or /api/ping response.
+- **Auth**: `?device_id=XXXX` query param on all endpoints except /api/ping.
+- **Rate limit**: /api/point min 500ms between commands (429 on violation).
+- **CORS**: all responses include `Access-Control-Allow-Origin: *`.
+
+### New modules (v2.0)
+
+| File | Purpose |
+|---|---|
+| `wifi.{c,h}` | WiFi STA init, mDNS registration, event handling, LED indicator |
+| `wifi_creds.h` | SSID/password (gitignored, not on GitHub) |
+| `rest_api.{c,h}` | HTTP server, REST handlers, auth, CORS, rate limit |
+| `mode_manager.{c,h}` | _Atomic mode state, 5-min command timeout, tick() |
+| `status.{c,h}` | Mutex-protected global status shared mic_task ↔ httpd |
+| `servo.c` | Added mutex on all public functions for concurrent access |
+| `tracker.c` | Added `tracker_reset_state()` for clean mode transitions |
+
 ### Phase 4 limitation: UART console
 
-Console code exists (`main/console.{c,h}`) but UART RX on this board doesn't work — CH343 USB-UART appears to be wired for TX only (ESP32 → host log output). Command input from host isn't physically received by the chip. Bypassing the VFS layer with direct `uart_read_bytes` also failed. Code retained for future hardware that supports bidirectional UART.
+Console code exists (`main/console.{c,h}`) but UART RX on this board doesn't work — CH343 USB-UART appears to be wired for TX only. REST API replaces UART console as the runtime control interface.
 
 Tuning still requires editing `TRACKER_DEFAULT_CONFIG` in `main/tracker.h` and reflashing.
 
@@ -159,7 +208,8 @@ Per `ArthurReadMe.md`:
 | DAT0 | GPIO2  | I²S PDM RX DIN[0] — M2 (L slot) + M1 (R slot) via PDM clock phase |
 | CLK1 | GPIO14 | same I²S CLK, fanned out via GPIO matrix (`I2S0I_WS_OUT_IDX` → GPIO 14) |
 | DAT1 | GPIO42 | I²S PDM RX DIN[1] — M3 (L slot) |
-| Servo | GPIO38 | (planned) LEDC PWM 50 Hz for hobby servo |
+| Servo | GPIO38 | LEDC PWM 50 Hz for JS6620 servo (shared with TFT backlight on expansion board) |
+| LED | GPIO48 | WiFi status indicator (blink=connecting, steady=connected) |
 
 The S3 I²S PDM RX peripheral exposes only one CLK output. CLK1 is a GPIO-matrix copy of CLK0 so both 3DMIC clock inputs see the same hardware edge — without this, M3↔M1 TDOA is meaningless.
 

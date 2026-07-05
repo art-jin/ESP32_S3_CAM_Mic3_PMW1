@@ -1,10 +1,10 @@
-# ESP32-S3-CAM × 3DMIC-291 六向声源定位
+# ESP32-S3-CAM × 3DMIC-291 六向声源定位 + REST API
 
-360° 六方向（0°/60°/120°/180°/240°/300°）声源定位，跑在 GOOUUU ESP32-S3-CAM + 3DMIC-291 三麦 MEMS 阵列上。算法用 1024 点 FFT + GCC-PHAT + 三麦几何求解，输出通过 UART 报告为钟点方向（"声源位于 6 点方向"）。
+360° 六方向声源定位 + WiFi REST API 双模式控制，跑在 GOOUUU ESP32-S3-CAM + 3DMIC-291 三麦 MEMS 阵列上。算法用 1024 点 FFT + GCC-PHAT + 三麦几何求解。支持两种工作模式：**声源跟踪**（自动）和**指令转向**（REST API 远程控制）。
 
 ## 项目状态
 
-**已跑通并标定（v1.3）**。前置预加重滤波器让**正常说话音量**就能驱动 3-mic 定位（之前只有吹哨/大声才有效）。
+**v2.0 — REST API 双模式完成**。
 
 | 用户位置 | 期望 α | 实测 α | 偏差 | 模式 |
 |---|---|---|---|---|
@@ -47,6 +47,49 @@
 - Phase 4 UART 调试因硬件限制（CH343 单向）未完成
 
 开发历史见 `SERVO_PLAN.md`。
+
+## REST API（v2.0）
+
+开机后默认进入**声源跟踪模式**。WiFi 连接后可通过 REST API 切换到**指令转向模式**，远程控制舵机指向。
+
+### 访问方式
+
+- **mDNS**: `http://esp32-mic-<MAC4>.local`（自动发现）
+- **Device ID**: 启动时看 UART 日志（仅此途径，不在网络层暴露）
+
+### API 列表
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| GET | `/api/ping` | ❌ | 心跳检查 |
+| GET | `/api/status?device_id=XXXX` | ✅ | 查询状态（模式/舵机/方位/WiFi）|
+| POST | `/api/mode?device_id=XXXX` | ✅ | 切换模式 |
+| POST | `/api/point?device_id=XXXX` | ✅ | 指令转向（仅 command 模式）|
+
+### 使用示例
+
+```bash
+# 查状态
+curl "http://192.168.1.105/api/status?device_id=A3K9X2"
+
+# 切到指令模式
+curl -X POST "http://192.168.1.105/api/mode?device_id=A3K9X2" -d '{"mode":"command"}'
+
+# 指向 7 点钟
+curl -X POST "http://192.168.1.105/api/point?device_id=A3K9X2" -d '{"dir":"7oc"}'
+
+# 切回声源跟踪
+curl -X POST "http://192.168.1.105/api/mode?device_id=A3K9X2" -d '{"mode":"track"}'
+```
+
+### 安全特性
+
+- 所有 API（除 ping）需 `?device_id=XXXX` 鉴权
+- `/api/point` 速率限制 500ms（防止高频命令导致舵机抖动）
+- 指令模式 5 分钟无操作自动切回声源跟踪
+- Device ID 仅通过 UART 日志展示，不在 mDNS 或 API 响应中暴露
+
+详见 `CLAUDE.md` "REST API" 章节。
 
 ## 环境限制：有效跟踪距离
 
@@ -157,14 +200,22 @@ idf.py -p /dev/cu.usbmodem21201 flash monitor
 
 ```
 main/
-├── main.c           FreeRTOS mic 任务：capture → deinterleave → DOA → UART log
+├── main.c           FreeRTOS mic 任务：capture → DOA → tracker → mode_tick → status_update
 ├── mic_capture.{c,h}  I²S PDM RX 多-DIN 初始化 + 阻塞读取 + GPIO-matrix CLK 扇出
 ├── doa.{c,h}        纯算法：FFT、GCC-PHAT、3-mic / 2-mic 几何求解、输出滞后
-└── CMakeLists.txt   idf_component_register(SRCS main.c mic_capture.c doa.c ...)
+├── servo.{c,h}      LEDC PWM 舵机驱动 + mutex + PWM soft-start + boot sweep
+├── tracker.{c,h}    DOA → servo 跟踪逻辑 + feed-forward + idle return
+├── wifi.{c,h}       WiFi STA + mDNS + 事件处理 + LED 指示
+├── rest_api.{c,h}   HTTP server + REST handlers + 鉴权 + CORS + 速率限制
+├── mode_manager.{c,h} 双模式状态机 + 5 分钟超时
+├── status.{c,h}     全局状态共享（mic_task ↔ httpd）
+├── wifi_creds.h     WiFi SSID/密码（gitignored）
+└── CMakeLists.txt   idf_component_register(...)
 ```
 
-- 音频任务在 `configMAX_PRIORITIES - 2`，8 KB 栈
-- 窗口：100 ms @ 48 kHz × 3 ch × int16 = 28 800 bytes / DMA read
+- 音频任务 `configMAX_PRIORITIES - 2`，8 KB 栈
+- HTTP 任务 `configMAX_PRIORITIES - 5`，6 KB 栈
+- 窗口：50 ms @ 48 kHz × 3 ch × int16 = 14 400 bytes / DMA read
 - FFT 1024 点（~21 ms 窗口）
 - K = d·fs/c ≈ 1.40 samples（边长 10 mm，48 kHz，声速 343 m/s）
 
