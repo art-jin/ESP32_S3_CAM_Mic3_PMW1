@@ -4,6 +4,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -11,8 +12,15 @@
 #include "mic_capture.h"
 #include "servo.h"
 #include "tracker.h"
+#include "wifi.h"
+#include "mode_manager.h"
+#include "status.h"
 
 static const char *TAG = "main";
+
+/* Device ID for REST API authentication. Compiled in for now.
+ * Future: generate random 6-char ID on first boot, store in NVS. */
+#define DEVICE_ID "A3K9X2"
 
 /* DMA window + per-channel scratch. All static — the mic task is the only
  * consumer, so there's no need for heap allocation or locking. */
@@ -86,6 +94,8 @@ static void mic_task(void *arg)
          * internally. (Phase 3 will add motion-pause to skip DOA updates
          * while the servo is moving, so servo whine doesn't feed back.) */
         tracker_update(&r);
+        mode_manager_tick();    /* check command-mode timeout (20Hz) */
+        status_update(&r);     /* publish to global status for REST API */
 
         if      (r.mode == DOA_MODE_3MIC) frames_3++;
         else if (r.mode == DOA_MODE_2MIC) frames_2++;
@@ -173,7 +183,15 @@ static void mic_task(void *arg)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "=== 3DMIC-291 GCC-PHAT DOA + servo tracker starting ===");
+    /* NVS — required by WiFi driver. */
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ESP_ERROR_CHECK(nvs_flash_init());
+    }
+
+    ESP_LOGI(TAG, "=== 3DMIC-291 DOA + servo + REST API starting ===");
+    ESP_LOGI(TAG, "  Device ID: %s", DEVICE_ID);
     ESP_LOGI(TAG, "  pins: CLK0=%d CLK1=%d DAT0=%d DAT1=%d",
              MIC_CLK0_GPIO, MIC_CLK1_GPIO, MIC_DAT0_GPIO, MIC_DAT1_GPIO);
     ESP_LOGI(TAG, "  PCM=%d Hz  FFT=%d pts  K=%.3f samp  max_lag=±%d",
@@ -184,6 +202,12 @@ void app_main(void)
     ESP_ERROR_CHECK(servo_init());
     servo_boot_sweep();   /* visual confirmation of home + range before tracking */
     tracker_init(NULL);
+    mode_manager_init();  /* default: MODE_TRACK */
+    status_init();        /* global status for REST API */
+
+    /* WiFi — non-blocking, connects in background. REST API starts
+     * automatically once IP is obtained. Track mode works without WiFi. */
+    wifi_init();
 
     /* 8 KB stack covers the FFT scratch (static) + libc math + ESP_LOG. */
     xTaskCreate(mic_task, "mic", 8192, NULL,

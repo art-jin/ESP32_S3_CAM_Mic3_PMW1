@@ -7,10 +7,15 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
 
 static const char *TAG = "servo";
+
+/* Mutex: protects servo state from concurrent access by mic_task (tracker)
+ * and http_task (REST handler). */
+static SemaphoreHandle_t s_mutex = NULL;
 
 /* TIMER_0 is conventionally reserved for camera XCLK (not used in this
  * project today, but kept free for forward compatibility). CHANNEL_0 same
@@ -115,6 +120,9 @@ esp_err_t servo_init(void)
 
     s_init_ok = true;
 
+    /* Create mutex for concurrent access protection. */
+    s_mutex = xSemaphoreCreateMutex();
+
     /* Center the servo at home directly (no smooth timer needed for 0→0). */
     s_target_angle_deg  = 0.0f;
     s_current_angle_deg = 0.0f;
@@ -152,6 +160,8 @@ void servo_set_pulse_us(uint32_t us)
 
 void servo_set_angle_deg(float angle_deg)
 {
+    if (!s_init_ok) return;
+    if (s_mutex) xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (angle_deg > SERVO_ANGLE_MAX_DEG) angle_deg = SERVO_ANGLE_MAX_DEG;
     if (angle_deg < SERVO_ANGLE_MIN_DEG) angle_deg = SERVO_ANGLE_MIN_DEG;
     /* Delta is from CURRENT (not previous target) — if mid-motion, the
@@ -166,31 +176,34 @@ void servo_set_angle_deg(float angle_deg)
         write_pwm_for_angle(angle_deg);
         s_last_motion_us = esp_timer_get_time();
         if (s_smooth_timer) xTimerStop(s_smooth_timer, 0);
+        if (s_mutex) xSemaphoreGive(s_mutex);
         return;
     }
 
     /* Larger steps go through the smooth timer. Timer auto-reloads every
      * 20 ms, advancing s_current toward s_target by SERVO_SMOOTH_STEP_DEG. */
     if (s_smooth_timer) xTimerStart(s_smooth_timer, 0);
+    if (s_mutex) xSemaphoreGive(s_mutex);
 }
 
 float servo_get_angle_deg(void)
 {
-    /* Returns the ACTUAL (ramped) position, not the commanded target.
-     * Feed-forward compensation (α_room = α_array + β_servo) needs the
-     * array's TRUE physical orientation. With PWM soft-start, the servo
-     * ramps toward target — returning the target while still ramping
-     * causes α_room to be overestimated, creating positive feedback
-     * that drives the servo to the clamp. */
-    return s_current_angle_deg;
+    if (s_mutex) xSemaphoreTake(s_mutex, portMAX_DELAY);
+    float ret = s_current_angle_deg;
+    if (s_mutex) xSemaphoreGive(s_mutex);
+    return ret;
 }
 
 bool servo_is_moving(void)
 {
+    if (s_mutex) xSemaphoreTake(s_mutex, portMAX_DELAY);
     /* Moving if PWM is still catching up to target. */
+    bool moving = false;
     if (fabsf(s_target_angle_deg - s_current_angle_deg) > 0.1f) {
-        return true;
+        moving = true;
     }
+    if (s_mutex) xSemaphoreGive(s_mutex);
+    if (moving) return true;
     if (s_last_motion_us == 0) return false;     /* no motion since boot */
     int64_t now = esp_timer_get_time();
     int64_t elapsed_ms = (now - s_last_motion_us) / 1000;

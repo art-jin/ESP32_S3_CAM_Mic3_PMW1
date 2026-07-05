@@ -90,6 +90,11 @@ tracker_mode_t tracker_get_mode(void);
 void tracker_set_enabled(bool enabled);
 bool tracker_is_enabled(void);
 
+/* Reset all internal tracking state (EMA, agreement buffer, target history).
+ * Called when switching from COMMAND back to TRACK to ensure the tracker
+ * starts fresh from the current servo position, without stale state. */
+void tracker_reset_state(void);
+
 /* Update config at runtime (Phase 4 will wire this to UART). */
 void tracker_set_config(const tracker_config_t *cfg);
 const tracker_config_t *tracker_get_config(void);

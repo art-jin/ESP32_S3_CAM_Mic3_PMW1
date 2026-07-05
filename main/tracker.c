@@ -314,6 +314,17 @@ bool tracker_is_enabled(void)
     return s_enabled;
 }
 
+void tracker_reset_state(void)
+{
+    s_have_target = false;
+    s_ema_init = false;
+    s_prev_alpha_room = -1.0f;
+    s_agree_n = 0;
+    s_agree_idx = 0;
+    s_last_3mic_us = esp_timer_get_time();
+    s_last_target_deg = 0.0f;
+}
+
 void tracker_set_config(const tracker_config_t *cfg)
 {
     if (cfg) s_cfg = *cfg;
