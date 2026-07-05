@@ -1,4 +1,5 @@
 #include "rest_api.h"
+#include <math.h>
 #include <string.h>
 #include <stdlib.h>
 #include "esp_http_server.h"
@@ -14,9 +15,12 @@
 static const char *TAG = "rest";
 static httpd_handle_t s_server = NULL;
 
-/* Rate limiter for /api/point (min 500ms between commands). */
+/* Rate limiter for /api/point and /api/shake (shared, min 500ms). */
 #define POINT_MIN_INTERVAL_US  500000
 static int64_t s_last_point_us = 0;
+
+/* Shake-in-progress flag: blocks /api/point and /api/mode during shake. */
+static volatile bool s_shaking = false;
 
 /* Clock-direction → servo angle mapping. 2oc and 10oc are clamped to
  * the ±100° mechanical limit. */
@@ -201,6 +205,12 @@ static esp_err_t handler_mode(httpd_req_t *req)
 {
     if (!check_auth(req)) return ESP_OK;
 
+    /* Reject mode switch during shake. */
+    if (s_shaking) {
+        return send_error(req, 409, "shaking",
+                          "shake in progress, wait for completion");
+    }
+
     char body[MAX_BODY_LEN];
     if (!read_body(req, body, sizeof(body))) return ESP_OK;
 
@@ -230,6 +240,12 @@ static esp_err_t handler_mode(httpd_req_t *req)
 static esp_err_t handler_point(httpd_req_t *req)
 {
     if (!check_auth(req)) return ESP_OK;
+
+    /* Reject during shake. */
+    if (s_shaking) {
+        return send_error(req, 409, "shaking",
+                          "shake in progress, wait for completion");
+    }
 
     /* Mode check: /point only in COMMAND mode. */
     if (mode_manager_get() != MODE_COMMAND) {
@@ -299,6 +315,71 @@ static esp_err_t handler_point(httpd_req_t *req)
     return send_json_ok(req, resp);
 }
 
+/* POST /api/shake?device_id=XXXX
+ * Shake the servo ±10° (boundary-aware) around the current position.
+ * Pattern: 3 oscillations, pause 2s, 2 oscillations, return to start.
+ * Blocking: HTTP response returns after shake completes (~7s).
+ * Only in COMMAND mode. /api/point and /api/mode rejected during shake.
+ */
+static esp_err_t handler_shake(httpd_req_t *req)
+{
+    if (!check_auth(req)) return ESP_OK;
+
+    /* Mode check. */
+    if (mode_manager_get() != MODE_COMMAND) {
+        return send_error(req, 403, "mode_is_track",
+                          "switch to command mode first");
+    }
+
+    /* Rate limit (shared with /api/point). */
+    int64_t now = esp_timer_get_time();
+    if (now - s_last_point_us < POINT_MIN_INTERVAL_US) {
+        return send_error(req, 429, "rate_limited",
+                          "min 500ms between commands");
+    }
+
+    /* Compute shake bounds from current position. */
+    float center = servo_get_angle_deg();
+    float hi = fminf(center + 10.0f, SERVO_ANGLE_MAX_DEG);
+    float lo = fmaxf(center - 10.0f, SERVO_ANGLE_MIN_DEG);
+
+    ESP_LOGI(TAG, "shake: center=%.1f hi=%.1f lo=%.1f", center, hi, lo);
+
+    /* Set shaking flag — blocks /api/point and /api/mode. */
+    s_shaking = true;
+    s_last_point_us = now;
+    mode_manager_register_command();
+
+    /* Group 1: 3 oscillations (hi-lo-hi-lo-hi-lo). */
+    for (int i = 0; i < 3; i++) {
+        servo_set_angle_deg(hi);
+        vTaskDelay(pdMS_TO_TICKS(400));
+        servo_set_angle_deg(lo);
+        vTaskDelay(pdMS_TO_TICKS(400));
+    }
+
+    /* Return to center and pause. */
+    servo_set_angle_deg(center);
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    /* Group 2: 2 oscillations. */
+    for (int i = 0; i < 2; i++) {
+        servo_set_angle_deg(hi);
+        vTaskDelay(pdMS_TO_TICKS(400));
+        servo_set_angle_deg(lo);
+        vTaskDelay(pdMS_TO_TICKS(400));
+    }
+
+    /* Return to original position. */
+    servo_set_angle_deg(center);
+    vTaskDelay(pdMS_TO_TICKS(300));  /* let servo settle */
+
+    s_shaking = false;
+    ESP_LOGI(TAG, "shake done, back at %.1f", center);
+
+    return send_json_ok(req, "{\"ok\":true}");
+}
+
 /* ---- Server start ---- */
 esp_err_t rest_api_start(void)
 {
@@ -331,6 +412,9 @@ esp_err_t rest_api_start(void)
     static const httpd_uri_t uri_point = {
         .uri = "/api/point", .method = HTTP_POST, .handler = handler_point
     };
+    static const httpd_uri_t uri_shake = {
+        .uri = "/api/shake", .method = HTTP_POST, .handler = handler_shake
+    };
     static const httpd_uri_t uri_options = {
         .uri = "/*", .method = HTTP_OPTIONS, .handler = handler_options
     };
@@ -339,8 +423,9 @@ esp_err_t rest_api_start(void)
     httpd_register_uri_handler(s_server, &uri_status);
     httpd_register_uri_handler(s_server, &uri_mode);
     httpd_register_uri_handler(s_server, &uri_point);
+    httpd_register_uri_handler(s_server, &uri_shake);
     httpd_register_uri_handler(s_server, &uri_options);
 
-    ESP_LOGI(TAG, "REST API started: /api/ping /api/status /api/mode /api/point");
+    ESP_LOGI(TAG, "REST API started: /api/ping /api/status /api/mode /api/point /api/shake");
     return ESP_OK;
 }
