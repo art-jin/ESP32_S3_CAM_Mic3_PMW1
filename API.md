@@ -63,16 +63,59 @@
   5. POST /api/mode {"mode":"track"} → 交还控制权给自动跟踪
 ```
 
-### 两种技能对比
+### Skill 3：摇动（SHAKE）
 
-| 维度 | 声源跟踪（TRACK） | 指令转向（COMMAND） |
-|---|---|---|
-| 舵机驱动方 | DOA 算法自动 | REST API 外部指令 |
-| DOA 运行 | ✅ 运行且驱动舵机 | ✅ 运行但不驱动舵机 |
-| `/api/point` | ❌ 返回 403 | ✅ 接受并执行 |
-| `/api/status` azimuth | 实时跟踪中 | 当前固定方向 + 环境声源监测 |
-| 超时 | 无 | 5 分钟 → 自动回 TRACK |
-| 开机默认 | ✅ | — |
+**模式标识**：`command`（摇动是 Skill 2 指令模式下的子功能）
+
+**行为**：在当前指向位置的 ±10° 范围内左右摇动舵机。摇动模式：先快速摇动 3 次（用于吸引注意），暂停 2 秒，再摇动 2 次（节奏变化），结束后回到原始指向位置。
+
+**摇动序列**：
+```
+当前位置 P（记录）
+振幅 hi = min(P+10, +100)    ← 边界自适应
+振幅 lo = max(P-10, -100)
+
+第 1 组（3 次左右）：
+  P → hi → lo → hi → lo → hi → lo    ~2.8s
+
+暂停 2s
+
+第 2 组（2 次左右）：
+  P → hi → lo → hi → lo              ~2.0s
+
+回到原位 → P                         ~0.2s
+
+总计 ~7s
+```
+
+**边界处理**：如果当前指向接近机械极限（如 P=95°），摇动范围自动收缩到 [85°, 100°]。不强制 ±10° 对称，但保证不超机械范围。
+
+**技术参数**：
+- 振幅：±10°（边界自适应）
+- 每个端点停留：400ms
+- 两组间暂停：2s
+- 总时长：~7s
+- 阻塞式：API 调用阻塞到摇动完成后返回
+- 期间 `/api/point` 和 `/api/mode` 返回 409 Conflict
+
+**适用场景**：
+- AI Agent 吸引用户注意（"看这里"）
+- 寻找/定位目标后确认指向（"我在看这个方向"）
+- 提示/通知（通过机械动作传递信号）
+- 示威/展示效果
+
+### 三种技能对比
+
+| 维度 | 声源跟踪（TRACK） | 指令转向（COMMAND） | 摇动（SHAKE） |
+|---|---|---|---|
+| 舵机驱动方 | DOA 算法自动 | REST API 外部指令 | REST API 内置序列 |
+| DOA 运行 | ✅ 运行且驱动舵机 | ✅ 运行但不驱动舵机 | ✅ 运行但不驱动舵机 |
+| `/api/point` | ❌ 返回 403 | ✅ 接受并执行 | ❌ 返回 409 |
+| `/api/shake` | ❌ 返回 403 | ✅ 接受并执行 | ❌ 返回 409 |
+| `/api/mode` | ✅ 可切换 | ✅ 可切换（摇动中 409）| — |
+| 结束位置 | 持续跟踪 | 停在最后指令位置 | **回到摇动前位置** |
+| 超时 | 无 | 5 分钟 → 自动回 TRACK | 无（7s 自动结束）|
+| 开机默认 | ✅ | — | — |
 
 ---
 
@@ -292,6 +335,67 @@ Content-Type: application/json
 
 ---
 
+### POST /api/shake
+
+摇动舵机 ±10°（边界自适应），吸引注意或确认指向。仅在 COMMAND 模式下可用。
+
+**请求**：
+```
+POST /api/shake?device_id=A3K9X2
+```
+
+无需 body。使用固定参数（3+2 组、±10°、400ms 停留、2s 暂停）。
+
+**响应**（200，阻塞 ~7s 后返回）：
+```json
+{"ok": true}
+```
+
+**摇动序列**：
+```
+记录当前位置 P
+hi = min(P + 10, +100)     ← 边界自适应
+lo = max(P - 10, -100)
+
+第 1 组：3 次左右（各 400ms 停留）
+  P → hi → lo → hi → lo → hi → lo
+  ≈ 2.8s
+
+暂停 2s
+
+第 2 组：2 次左右
+  P → hi → lo → hi → lo
+  ≈ 2.0s
+
+回到 P（原位）
+  ≈ 0.2s
+
+总计 ≈ 7s
+```
+
+**边界示例**：
+- P = 0° → hi=10, lo=-10（完整 ±10°）
+- P = 95° → hi=100, lo=85（正向收缩到 +5°，负向保持 -10°）
+- P = -98° → hi=-88, lo=-100（负向收缩到 +8°）
+
+**行为细节**：
+- **阻塞式**：HTTP 连接保持 ~7s，摇动完成后返回。调用方需设置 ≥10s 超时
+- **摇动期间** `/api/point` 返回 409 Conflict
+- **摇动期间** `/api/mode` 返回 409 Conflict
+- **速率限制**：与 `/api/point` 共享 500ms 间隔
+- **结束位置**：精确回到摇动前的位置
+
+**错误**：
+
+| HTTP Code | error | 条件 |
+|---|---|---|
+| 401 | unauthorized | device_id 缺失或错误 |
+| 403 | mode_is_track | 当前是 track 模式 |
+| 409 | shaking | 摇动进行中（重复调用） |
+| 429 | rate_limited | 500ms 内重复调用 |
+
+---
+
 ## 四、错误响应统一格式
 
 所有错误响应遵循：
@@ -308,8 +412,9 @@ Content-Type: application/json
 |---|---|---|---|
 | 400 | `bad_request` | body 空/过长/JSON 解析失败/字段缺失 | POST 请求格式错误 |
 | 401 | `unauthorized` | invalid or missing device_id | 鉴权失败 |
-| 403 | `mode_is_track` | switch to command mode first | track 模式下调用 /api/point |
-| 429 | `rate_limited` | min 500ms between commands | /api/point 高频调用 |
+| 403 | `mode_is_track` | switch to command mode first | track 模式下调用 /api/point 或 /api/shake |
+| 409 | `shaking` | shake in progress, wait for completion | 摇动期间调用 /api/point 或 /api/mode |
+| 429 | `rate_limited` | min 500ms between commands | /api/point 或 /api/shake 高频调用 |
 | 500 | `internal` | unexpected error | 意料外错误 |
 
 ---
@@ -329,10 +434,16 @@ r = requests.get(f"{BASE}/api/status", params={"device_id": DEVICE_ID})
 status = r.json()
 print(f"模式: {status['mode']}, 方位: {status['azimuth']}°, 舵机: {status['servo']}°")
 
-# 切到指令模式 + 指向 7oc + 等 2 秒 + 切回跟踪
+# 切到指令模式 + 指向 7oc + 摇动 + 切回跟踪
 requests.post(f"{BASE}/api/mode", params={"device_id": DEVICE_ID}, json={"mode": "command"})
 requests.post(f"{BASE}/api/point", params={"device_id": DEVICE_ID}, json={"dir": "7oc"})
-time.sleep(2)
+time.sleep(1)  # 等 point 完成 + 避免 rate limit
+
+# 摇动（阻塞 ~7s）
+r = requests.post(f"{BASE}/api/shake", params={"device_id": DEVICE_ID}, timeout=10)
+print(f"摇动完成: {r.json()}")
+
+time.sleep(1)
 requests.post(f"{BASE}/api/mode", params={"device_id": DEVICE_ID}, json={"mode": "track"})
 ```
 
@@ -356,6 +467,13 @@ await fetch(`${BASE}/api/point?device_id=${DEVICE_ID}`, {
     method: "POST",
     body: JSON.stringify({dir: "9oc"})
 });
+
+// 摇动（阻塞 ~7s）
+await new Promise(resolve => setTimeout(resolve, 600)); // 避免 rate limit
+const shakeRes = await fetch(`${BASE}/api/shake?device_id=${DEVICE_ID}`, {
+    method: "POST"
+});
+console.log("摇动完成:", await shakeRes.json());
 ```
 
 ### curl
@@ -372,6 +490,9 @@ curl -X POST "http://esp32-mic-24f8.local/api/point?device_id=A3K9X2" -d '{"dir"
 
 # 指向自定义角度 -45°
 curl -X POST "http://esp32-mic-24f8.local/api/point?device_id=A3K9X2" -d '{"angle":-45}'
+
+# 摇动舵机（阻塞 ~7s，记得设超时）
+curl --max-time 10 -X POST "http://esp32-mic-24f8.local/api/shake?device_id=A3K9X2"
 
 # 切回声源跟踪
 curl -X POST "http://esp32-mic-24f8.local/api/mode?device_id=A3K9X2" -d '{"mode":"track"}'
@@ -419,4 +540,16 @@ Agent 想知道不同方向有没有声源：
 ```
 开机 → boot sweep → WiFi 连接 → 进入 TRACK 模式 → 自动跟踪声源
 （REST API 可用但不需要调用，设备完全自主工作）
+```
+
+### 场景 D：摇动吸引注意
+
+```
+Agent 检测到用户走神，需要吸引注意：
+
+1. POST /api/mode command          → 接管舵机
+2. POST /api/point 6oc             → 指向用户方向
+3. POST /api/shake                 → 摇动 ±10°，3+2 组（~7s）
+                                    用户注意到设备在动
+4. POST /api/mode track            → 恢复自动跟踪
 ```
