@@ -144,7 +144,7 @@ curl http://esp32-mic-24f8.local/api/ping
 
 | 项 | 值 | 获取方式 |
 |---|---|---|
-| Device ID | `A3K9X2`（6 位字母数字） | UART 启动日志：`Device ID: A3K9X2` |
+| Device ID | NVS 随机生成 6 位 [A-Z0-9]，每台板子不同 | UART 启动日志：`Device ID: XXXXXX` |
 | mDNS Hostname | `esp32-mic-XXXX.local` | mDNS 扫描 |
 | IP 地址 | DHCP 分配 | UART 日志或路由器查 |
 
@@ -169,8 +169,8 @@ curl http://esp32-mic-24f8.local/api/ping
 除 `/api/ping` 外，所有 API 必须在 URL 中携带 `device_id` 参数：
 
 ```
-GET /api/status?device_id=A3K9X2
-POST /api/point?device_id=A3K9X2
+GET /api/status?device_id=XXXXXX
+POST /api/point?device_id=XXXXXX
 ```
 
 未携带或错误的 device_id 返回 401。
@@ -201,7 +201,7 @@ GET /api/ping
 
 **请求**：
 ```
-GET /api/status?device_id=A3K9X2
+GET /api/status?device_id=XXXXXX
 ```
 
 **响应**（200）：
@@ -242,7 +242,7 @@ GET /api/status?device_id=A3K9X2
 
 **请求**：
 ```
-POST /api/mode?device_id=A3K9X2
+POST /api/mode?device_id=XXXXXX
 Content-Type: application/json
 
 {"mode": "command"}
@@ -279,7 +279,7 @@ Content-Type: application/json
 
 **请求**（方式 A - 时钟方向）：
 ```
-POST /api/point?device_id=A3K9X2
+POST /api/point?device_id=XXXXXX
 Content-Type: application/json
 
 {"dir": "7oc"}
@@ -287,7 +287,7 @@ Content-Type: application/json
 
 **请求**（方式 B - 原始角度）：
 ```
-POST /api/point?device_id=A3K9X2
+POST /api/point?device_id=XXXXXX
 Content-Type: application/json
 
 {"angle": 30}
@@ -341,7 +341,7 @@ Content-Type: application/json
 
 **请求**：
 ```
-POST /api/shake?device_id=A3K9X2
+POST /api/shake?device_id=XXXXXX
 ```
 
 无需 body。使用固定参数（3+2 组、±10°、400ms 停留、2s 暂停）。
@@ -427,7 +427,7 @@ lo = max(P - 10, -100)
 import requests
 
 BASE = "http://192.168.1.105"
-DEVICE_ID = "A3K9X2"
+DEVICE_ID = "XXXXXX"
 
 # 查状态
 r = requests.get(f"{BASE}/api/status", params={"device_id": DEVICE_ID})
@@ -451,7 +451,7 @@ requests.post(f"{BASE}/api/mode", params={"device_id": DEVICE_ID}, json={"mode":
 
 ```javascript
 const BASE = "http://esp32-mic-24f8.local";
-const DEVICE_ID = "A3K9X2";
+const DEVICE_ID = "XXXXXX";
 
 // 查状态
 const res = await fetch(`${BASE}/api/status?device_id=${DEVICE_ID}`);
@@ -480,22 +480,22 @@ console.log("摇动完成:", await shakeRes.json());
 
 ```bash
 # 查状态
-curl "http://esp32-mic-24f8.local/api/status?device_id=A3K9X2"
+curl "http://esp32-mic-24f8.local/api/status?device_id=XXXXXX"
 
 # 切到指令模式
-curl -X POST "http://esp32-mic-24f8.local/api/mode?device_id=A3K9X2" -d '{"mode":"command"}'
+curl -X POST "http://esp32-mic-24f8.local/api/mode?device_id=XXXXXX" -d '{"mode":"command"}'
 
 # 指向 7 点钟
-curl -X POST "http://esp32-mic-24f8.local/api/point?device_id=A3K9X2" -d '{"dir":"7oc"}'
+curl -X POST "http://esp32-mic-24f8.local/api/point?device_id=XXXXXX" -d '{"dir":"7oc"}'
 
 # 指向自定义角度 -45°
-curl -X POST "http://esp32-mic-24f8.local/api/point?device_id=A3K9X2" -d '{"angle":-45}'
+curl -X POST "http://esp32-mic-24f8.local/api/point?device_id=XXXXXX" -d '{"angle":-45}'
 
 # 摇动舵机（阻塞 ~7s，记得设超时）
-curl --max-time 10 -X POST "http://esp32-mic-24f8.local/api/shake?device_id=A3K9X2"
+curl --max-time 10 -X POST "http://esp32-mic-24f8.local/api/shake?device_id=XXXXXX"
 
 # 切回声源跟踪
-curl -X POST "http://esp32-mic-24f8.local/api/mode?device_id=A3K9X2" -d '{"mode":"track"}'
+curl -X POST "http://esp32-mic-24f8.local/api/mode?device_id=XXXXXX" -d '{"mode":"track"}'
 ```
 
 ---

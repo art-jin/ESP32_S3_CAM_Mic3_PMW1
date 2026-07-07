@@ -126,7 +126,7 @@ Mode switching via REST only. Command mode auto-returns to track after 5 min idl
 ### Device access
 
 - **mDNS**: `http://esp32-mic-<MAC4>.local` (auto-discovered)
-- **Device ID**: `A3K9X2` (compiled in; future: NVS random on first boot)
+- **Device ID**: NVS-generated 6-char [A-Z0-9] on first boot, persistent across reboots. Read from UART log. Unique per board.
 - **Device ID exposure**: UART log only. Never in mDNS hostname or /api/ping response.
 - **Auth**: `?device_id=XXXX` query param on all endpoints except /api/ping.
 - **Rate limit**: /api/point min 500ms between commands (429 on violation).

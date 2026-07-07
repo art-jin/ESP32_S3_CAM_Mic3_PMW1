@@ -82,16 +82,16 @@
 
 ```bash
 # 查状态
-curl "http://192.168.1.105/api/status?device_id=A3K9X2"
+curl "http://192.168.1.105/api/status?device_id=XXXXXX"
 
 # 切到指令模式
-curl -X POST "http://192.168.1.105/api/mode?device_id=A3K9X2" -d '{"mode":"command"}'
+curl -X POST "http://192.168.1.105/api/mode?device_id=XXXXXX" -d '{"mode":"command"}'
 
 # 指向 7 点钟
-curl -X POST "http://192.168.1.105/api/point?device_id=A3K9X2" -d '{"dir":"7oc"}'
+curl -X POST "http://192.168.1.105/api/point?device_id=XXXXXX" -d '{"dir":"7oc"}'
 
 # 切回声源跟踪
-curl -X POST "http://192.168.1.105/api/mode?device_id=A3K9X2" -d '{"mode":"track"}'
+curl -X POST "http://192.168.1.105/api/mode?device_id=XXXXXX" -d '{"mode":"track"}'
 ```
 
 ### 安全特性
