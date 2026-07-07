@@ -15,6 +15,10 @@
 static const char *TAG = "rest";
 static httpd_handle_t s_server = NULL;
 
+/* Device ID from NVS (generated on first boot, persistent).
+ * Defined in main.c, declared extern here. */
+extern char g_device_id[8];
+
 /* Rate limiter for /api/point and /api/shake (shared, min 500ms). */
 #define POINT_MIN_INTERVAL_US  500000
 static int64_t s_last_point_us = 0;
@@ -40,7 +44,6 @@ static const struct {
 };
 #define N_DIR  (sizeof(s_dir_map) / sizeof(s_dir_map[0]))
 
-#define DEVICE_ID "A3K9X2"
 #define MAX_BODY_LEN 128
 
 /* ---- CORS + error helpers ---- */
@@ -82,7 +85,7 @@ static bool check_auth(httpd_req_t *req)
     char dev_id[16] = {0};
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
         httpd_query_key_value(query, "device_id", dev_id, sizeof(dev_id)) == ESP_OK &&
-        strcmp(dev_id, DEVICE_ID) == 0) {
+        strcmp(dev_id, g_device_id) == 0) {
         return true;
     }
     send_error(req, 401, "unauthorized", "invalid or missing device_id");

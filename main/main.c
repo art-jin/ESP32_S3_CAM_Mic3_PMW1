@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -18,9 +19,36 @@
 
 static const char *TAG = "main";
 
-/* Device ID for REST API authentication. Compiled in for now.
- * Future: generate random 6-char ID on first boot, store in NVS. */
-#define DEVICE_ID "A3K9X2"
+/* Device ID: generated once on first boot, stored in NVS, never changes.
+ * 6 chars from [A-Z0-9]. Accessed by rest_api.c for auth. */
+char g_device_id[8] = {0};
+
+static void device_id_init(void)
+{
+    nvs_handle_t h;
+    size_t len = sizeof(g_device_id);
+    if (nvs_open("device", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_str(h, "id", g_device_id, &len) == ESP_OK) {
+            nvs_close(h);
+            ESP_LOGI(TAG, "Device ID (from NVS): %s", g_device_id);
+            return;
+        }
+        nvs_close(h);
+    }
+    /* Not in NVS yet — generate random 6-char ID. */
+    static const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    for (int i = 0; i < 6; i++) {
+        g_device_id[i] = charset[esp_random() % 36];
+    }
+    g_device_id[6] = '\0';
+    /* Save to NVS so it persists across reboots. */
+    if (nvs_open("device", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, "id", g_device_id);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    ESP_LOGI(TAG, "Device ID (newly generated): %s", g_device_id);
+}
 
 /* DMA window + per-channel scratch. All static — the mic task is the only
  * consumer, so there's no need for heap allocation or locking. */
@@ -108,11 +136,11 @@ static void mic_task(void *arg)
          * most frames as noise. */
         if (now - stats_start > 5 * 1000 * 1000) {
             int total = frames_3 + frames_2 + frames_bad;
-            ESP_LOGI(TAG, "[5s] %d frames: 3-mic=%d (%d%%)  2-mic=%d (%d%%)  bad=%d",
+            ESP_LOGI(TAG, "[5s] %d frames: 3-mic=%d (%d%%)  2-mic=%d (%d%%)  bad=%d  DeviceID=%s",
                      total,
                      frames_3, total ? frames_3 * 100 / total : 0,
                      frames_2, total ? frames_2 * 100 / total : 0,
-                     frames_bad);
+                     frames_bad, g_device_id);
             frames_3 = frames_2 = frames_bad = 0;
             stats_start = now;
         }
@@ -190,8 +218,9 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
+    device_id_init();  /* load or generate persistent device ID */
+
     ESP_LOGI(TAG, "=== 3DMIC-291 DOA + servo + REST API starting ===");
-    ESP_LOGI(TAG, "  Device ID: %s", DEVICE_ID);
     ESP_LOGI(TAG, "  pins: CLK0=%d CLK1=%d DAT0=%d DAT1=%d",
              MIC_CLK0_GPIO, MIC_CLK1_GPIO, MIC_DAT0_GPIO, MIC_DAT1_GPIO);
     ESP_LOGI(TAG, "  PCM=%d Hz  FFT=%d pts  K=%.3f samp  max_lag=±%d",
