@@ -4,20 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Working (v2.0).** 360° six-direction sound source localization + wide-range servo tracking + **REST API dual-mode control** on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array.
+**Working (v2.1).** 360° six-direction sound source localization + wide-range servo tracking + **REST API dual-mode control** + **on-device diagnostics** on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array.
 
 - DOA: 6-position whistle calibration (2026-06-25), raw azimuth error **5/6 positions ≤ ±5°**, after per-sextant A1 correction **target ±3° at 4/6 positions** (s=1 unreliable — bias is non-monotonic within sextant).
 - Frame rate: **16.6 Hz** (DMA window 50 ms). CPU ~30% (DOA) + ~10% (WiFi+HTTP) = ~40%.
 - Servo tracking: **±100° range** (270° JS6620, **1.333:1 external gear**), covering **~2:40 → 9:20 o'clock** (~200° arc). Feed-forward compensation with PWM soft-start bug fix.
 - **REST API (v2.0)**: WiFi + mDNS + 4 endpoints. Two modes: **track** (auto DOA tracking, default) and **command** (REST-directed servo positioning). See "REST API" section below.
 - Boot sweep: servo tours **0 → +100 → 0 → −100 → 0** (~8.8 s) on startup.
+- **Boot grace period (v2.1)**: 3 s stricter-DOA window after tracker init — eliminates boot-sweep-residual + ambient-noise peaks that misread toward 9oc blind spot (1/5 boots pre-fix, 0/5 post-fix). See "Boot grace period" section.
+- **Diagnostics (v2.1)**: coredump-to-flash + 32-slot NVS event ring buffer. Captures panic backtraces and pre-crash event flow across reboots. See "Diagnostics" section.
 - Speech sensitivity: front-end pre-emphasis (`y = x - 0.97·x[i-1]`) enables 16% 3-mic frames at normal speaking volume.
 - Idle return: after 10 s of silence, servo steps back toward home at ~2.5°/s.
 - Adaptive motion-pause: 200/350/500 ms by step magnitude.
 - LED indicator (GPIO 48): slow blink = WiFi connecting, steady on = connected.
 - Direction output: UART log + physical servo pointing + **REST API JSON**.
 
-Tagged `v2.0-rest-api`. History: `v1.7` (calibrate new board, boot sweep), `v1.6` (20T external gear + feed-forward bug fix), `v1.5` (Phase B), `v1.4` (Phase A), `v1.3` (feed-forward + pre-emphasis), `v1.2` (270° servo slope), `v1.1` (feed-forward), `servo-stable-1.0`, `servo-tracking-1.0`, `3麦阵列测试完成1.0`, `gear-15T-inner-50T-final`.
+Tagged `v2.1-diagnostics`. History: `v2.0-rest-api`, `v1.7` (calibrate new board, boot sweep), `v1.6` (20T external gear + feed-forward bug fix), `v1.5` (Phase B), `v1.4` (Phase A), `v1.3` (feed-forward + pre-emphasis), `v1.2` (270° servo slope), `v1.1` (feed-forward), `servo-stable-1.0`, `servo-tracking-1.0`, `3麦阵列测试完成1.0`, `gear-15T-inner-50T-final`.
 
 ### Phase A changes (v1.4, 2026-06-25)
 
@@ -53,6 +55,23 @@ Tagged `v2.0-rest-api`. History: `v1.7` (calibrate new board, boot sweep), `v1.6
 |---|---|---|
 | Boot sweep on startup | `main.c` (calls `servo_boot_sweep()`), `servo.c` | Servo tours 0 → +100 → 0 → −100 → 0 before tracking starts; ~8.8 s total (100°/s ramp + 1.2 s dwell per waypoint). Lets user visually confirm home direction + full range each power-on. |
 | Runtime-overridable ramp step | `servo.c` `s_smooth_step_deg` + `servo_set_smooth_step_deg()` | Sweep slows ramp to 2°/20 ms (=100°/s) for visibility, restores 6°/20 ms (=300°/s) before tracking starts. Tracking speed unaffected. |
+
+### Boot grace period (v2.1, 2026-07-11)
+
+| Change | File | Effect |
+|---|---|---|
+| 3-second stricter-DOA gate after init | `main/tracker.c` `GRACE_PERIOD_MS` / `GRACE_MIN_CONF` | While `s_have_target == false` AND within 3 s of `tracker_init`, require `confidence ≥ 0.6` AND `stable_sextant ≥ 0` (3-frame hysteresis locked). Normal 0.35 + 2-of-3 path resumes after first DOA accept. |
+
+**Root cause (caught via evlog)**: boot sweep residual vibration + ambient noise occasionally produced spurious 3-mic DOA peaks around 254° (near the 9oc M1-anti blind spot). The standard min_conf=0.35 + 2-of-3 agreement filters passed this through on 1/5 boots, causing the servo to dart to +82° before correcting. Captured event sequence from a failing boot:
+
+```
+seq 133  DOA_FIRST    value=254°   ← spurious
+seq 134  SERVO_CMD    value=+67°   ← user sees "dart toward 9oc"
+seq 135  SERVO_CMD    value=+82°
+seq 136  SERVO_CMD    value=+67°   ← real DOA corrects
+```
+
+Post-fix verification (5 reset cycles): 0/5 spurious darts, 5/5 first-DOA azimuths in the 6oc-8oc range. Side effect: ~1 s additional latency on first DOA accept, imperceptible in normal use.
 
 ## Servo hardware (v1.6, 2026-06-30)
 
@@ -150,6 +169,64 @@ Console code exists (`main/console.{c,h}`) but UART RX on this board doesn't wor
 
 Tuning still requires editing `TRACKER_DEFAULT_CONFIG` in `main/tracker.h` and reflashing.
 
+## Diagnostics (v2.1, 2026-07-11)
+
+Two complementary post-mortem mechanisms for diagnosing spontaneous reboots and unexpected servo behavior. Both survive reboots, both are readable without monitor attached at crash time.
+
+### A. Core Dump to Flash
+
+ESP-IDF native: on panic, writes all task stacks + registers to a dedicated flash partition. Read post-reboot.
+
+```
+$ idf.py -p /dev/cu.usbmodem21201 coredump-info     # backtrace summary
+$ idf.py -p /dev/cu.usbmodem21201 coredump-debug    # full GDB session
+```
+
+Partition layout (see `partitions.csv`): `coredump` is 64 KB at offset 0x110000. ELF format. Enabled via `sdkconfig.defaults` (`CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y`).
+
+**Doesn't capture**: brownout reset (no panic), hardware WDT, power-on reset. If `coredump-info` shows an empty partition after an unexpected reboot, suspect power/brownout, not a crash.
+
+### B. NVS Event Ring Buffer (`main/evlog.{c,h}`)
+
+32-slot ring of 8-byte packed events in NVS namespace `"evlog"`. On each boot, prints the prior boot's events to UART and increments a boot counter. Buffer is **not** cleared — overwritten cyclically. Use the `seq` field to disambiguate stale vs fresh.
+
+Event record (8 bytes packed):
+| Field | Type | Notes |
+|---|---|---|
+| `seq` | u16 | Monotonic counter, wraps at 65536 |
+| `type` | u8 | `EV_BOOT` / `EV_DOA_FIRST` / etc. |
+| `flags` | u8 | Sub-type (e.g., servo cmd source) |
+| `value` | i16 | Numeric payload (angle, azimuth, reset reason) |
+| `uptime_ms` | u32 | `esp_timer_get_time()` / 1000 |
+
+Event types and insertion points (9 total):
+
+| Event | File | `flags` / `value` | Purpose |
+|---|---|---|---|
+| `EV_BOOT` | `main.c` | 0 / `esp_reset_reason()` | Reset reason (1=poweron, 4=panic, 9=brownout, 11=USB/JTAG) |
+| `EV_SWEEP_DONE` | `servo.c` end of `servo_boot_sweep` | `SRC_BOOT` / duration ms | Boot sweep completion |
+| `EV_DOA_FIRST` | `tracker.c` accept branch | sextant / azimuth° | Tracker's first accepted DOA |
+| `EV_SERVO_CMD` | `tracker.c`, `rest_api.c` | `SRC_TRACKER`/`SRC_REST`/`SRC_IDLE`/`SRC_SHAKE` / angle° | Every servo command |
+| `EV_WIFI_UP` | `wifi.c` got-IP handler | 0 / 0 | WiFi connected |
+| `EV_MODE_CHG` | `mode_manager.c` | old_mode / new_mode | Mode transitions |
+| `EV_SHAKE_START` / `EV_SHAKE_END` | `rest_api.c` | 0 / center° | Brackets the shake sequence |
+
+Thread-safe (internal mutex). NVS write frequency ≈ 5 Hz max (every accepted DOA), well within flash endurance.
+
+### Reading event log on boot
+
+UART startup log will show:
+
+```
+I (473) evlog: === event log: boot #N, seq=S, idx=I ===
+I (473) evlog:   [   9556 ms] seq=  43  DOA_FIRST    flags=255  value=181
+I (483) evlog:   [   9562 ms] seq=  44  SERVO_CMD    flags=1    value=0
+...
+I (673) evlog: === end event log ===
+```
+
+Lines are in write-order (oldest first within the 32-slot window). After printing, the new boot's events start accumulating.
+
 ## Project goal
 
 Implement **360° six-direction sound source localization** on a GOOUUU ESP32-S3-CAM board using the 3DMIC-291 three-microphone MEMS array. The user cannot solder, so all mic-array channel selection is done in software (I²S PDM L/R channel selection, GPIO matrix clock fan-out) rather than by re-wiring the board. The localization result is reported over UART as a clock-face direction (e.g. "声源位于 6 点方向").
@@ -172,14 +249,34 @@ idf.py -p /dev/cu.usbmodem21201 monitor      # Ctrl-] to exit
 
 ### Flashing — manual BOOT-button entry required
 
-This GOOUUU board's auto-reset circuit does **not** work with esptool over the CH343 USB-UART. Flashing requires manual bootloader entry:
+This GOOUUU board's auto-reset circuit does **not** work with esptool over the CH343 USB-UART (note: esptool v5+ sometimes succeeds via RTS hard-reset — try `idf.py flash` first, fall back to manual BOOT only if it fails). Manual bootloader entry:
 
 1. Hold **BOOT**.
 2. Press and release **RST**.
 3. Release **BOOT**.
 4. Run `idf.py -p /dev/cu.usbmodem21201 flash` immediately.
 
-After RST the USB-CDC device name changes (observed: from `cu.usbmodem1234561` to `cu.usbmodem21201`). Use the CH343 name (`usbmodem21201`) for both flash and monitor. Do **not** toggle DTR/RTS from a host script to reset — that re-enters bootloader mode.
+After RST the USB-CDC device name changes (observed: from `cu.usbmodem1234561` to `cu.usbmodem21201`). Use the CH343 name (`usbmodem21201`) for both flash and monitor.
+
+### Erasing flash (required when changing partition table)
+
+When `partitions.csv` changes (e.g., adding the coredump partition), the partition table layout shifts and NVS content may be invalid. Run once before re-flashing:
+
+```bash
+idf.py -p /dev/cu.usbmodem21201 erase-flash
+idf.py -p /dev/cu.usbmodem21201 flash
+```
+
+This regenerates the NVS device ID (read the new ID from UART log on next boot).
+
+### Reading crash dumps and reset reason
+
+```bash
+idf.py -p /dev/cu.usbmodem21201 coredump-info    # panic backtrace summary
+idf.py -p /dev/cu.usbmodem21201 coredump-debug   # full GDB session with symbols
+```
+
+The coredump partition (64 KB at offset 0x110000) is overwritten on each new panic. The NVS event ring buffer (`evlog` namespace) survives across reboots and is NOT cleared on coredump.
 
 ### Reading UART without `monitor`
 
@@ -247,8 +344,17 @@ main/
 ├── mic_capture.{c,h}  I²S PDM RX multi-DIN init + blocking read; GPIO-matrix CLK fan-out
 ├── doa.{c,h}        Pure algorithm: FFT, GCC-PHAT, 3-mic / 2-mic geometry solve,
 │                    output hysteresis. No hardware deps.
+├── servo.{c,h}      LEDC PWM servo driver + mutex + PWM soft-start + boot sweep
+├── tracker.{c,h}    DOA → servo tracking logic + feed-forward + idle return + grace period
+├── wifi.{c,h}       WiFi STA + mDNS + event handling + LED indicator
+├── rest_api.{c,h}   HTTP server + REST handlers + auth + CORS + rate limit
+├── mode_manager.{c,h}  Atomic mode state + 5-min command timeout
+├── status.{c,h}     Mutex-protected global status shared mic_task ↔ httpd
+├── evlog.{c,h}      NVS-backed 32-slot event ring buffer for post-mortem diagnostics
 └── CMakeLists.txt   idf_component_register(SRCS main.c mic_capture.c doa.c ...)
 ```
+
+Project root also has `partitions.csv` (custom: nvs + phy_init + factory 1M + coredump 64K) and `sdkconfig.defaults` (enables coredump to flash).
 
 Audio path runs in a single `mic` task at `configMAX_PRIORITIES - 2` on an 8 KB stack. Window: 100 ms at 48 kHz × 3 channels × int16 = 28 800 bytes per DMA read. FFT is 1024 points (~21 ms).
 
@@ -428,6 +534,27 @@ Measured at 7oc, normal speech volume (AC RMS 30-70 LSB):
 - Before pre-emphasis: 0% 3-mic, ρ01 > 0.95, servo never moves
 - After front-end pre-emphasis: 16% 3-mic, ρ01 ≈ 0.80, servo tracks to +33°
 
+### 9. Boot-time noise + boot-sweep residual → spurious DOA toward blind spots
+
+**Symptom**: 1 in 5 boots, the servo would dart to +82° (~9oc) immediately after boot sweep, then slowly correct over ~10 seconds. User-visible "boot-up confusion" pattern.
+
+**Root cause**: boot sweep mechanical residual + ambient room noise occasionally produces two consecutive 3-mic DOA frames reporting azimuths near 254° (close to the 9oc M1-anti geometric blind spot). These pass the standard filters:
+- `confidence ≥ 0.35` — noise peaks can reach 0.35-0.45
+- 2-of-3 agreement — if two noise frames happen to land near each other in 50ms, they confirm
+
+Once accepted, the tracker computes target = 254° − 180° = +74° and darts toward the 9oc limit.
+
+**Things that did NOT work**:
+- Raising global `min_confidence` to 0.6 — rejects too many real speech frames at edge of detection range
+- Stricter agreement (3-of-3 instead of 2-of-3) — speech at 16% 3-mic frame rate rarely gets 3 in a row
+- Longer boot sweep pause — doesn't help; the spurious peaks happen 10+ seconds after sweep ends
+
+**Fix (boot grace period)**: gate only the *first* DOA accept (before `s_have_target == true`) for the first 3 seconds after `tracker_init`. During that window, require `confidence ≥ 0.6` AND `stable_sextant ≥ 0` (locked 3-frame hysteresis). Both conditions together reliably reject boot-time noise. After the first accept, grace disables permanently and the normal fast-response path resumes.
+
+**Why this works**: the spurious 254° peaks have conf 0.35-0.45 and never achieve stable_sextant lock (3 consecutive frames agreeing on sextant 4). Real speech at any azimuth builds stable_sextant within ~200ms. The stricter criteria only delay the *first* response by ~1s on legitimate speech — imperceptible.
+
+**Discovery tool**: this was diagnosed entirely via the NVS event ring buffer (`main/evlog.c`). Without persistent event logging across reboots, the 1-in-5 failure pattern was nearly impossible to capture live. See "Diagnostics" section for the mechanism.
+
 ## Reference projects (sibling directories)
 
 - `~/PycharmProjects/ESP32_C3_Mic3/` — Same goal on ESP32-C3. C3's I²S PDM RX supports only **1 data line**, so the L/R collapse there is a true hardware ceiling. Its `localize.c` (cross-correlation + parabolic peak + 3-mic azimuth solver) is the ancestor of this project's `doa.c`. Read its CLAUDE.md for the failed-C3 history.
@@ -435,6 +562,9 @@ Measured at 7oc, normal speech volume (AC RMS 30-70 LSB):
 
 ## Implementation direction still open
 
-1. **UART console for runtime tuning** — `console.c` is written but the board's CH343 USB-UART appears to be wired for log output only (no host→ESP32 RX path). To unblock, either jumper a real USB-UART to other GPIOs, or switch to native USB-CDC via `CONFIG_ESP_CONSOLE_USB_CDC=y` (requires USB cable to the S3's native USB port, not the CH343 port).
+1. **UART console for runtime tuning** — `console.c` is written but the board's CH343 USB-UART appears to be wired for log output only (no host→ESP32 RX path). To unblock, either jumper a real USB-UART to other GPIOs, or switch to native USB-CDC via `CONFIG_ESP_CONSOLE_USB_CDC=y` (requires USB cable to the S3's native USB port, not the CH343 port). **Mostly obsoleted by REST API (runtime control) + evlog (post-mortem)** — only live parameter tuning still needs this.
 2. **Voice-activity detection gate** — currently the algorithm tries to localize every frame; adding a simple energy gate (skip if `AC_RMS < 30 LSB` on all channels) would suppress more noise frames and free CPU.
 3. **PSRAM not used** — all buffers are internal SRAM (`s_dma`, FFT scratch, lag history). If window size or FFT order is increased, move them to PSRAM (board has 8 MB octal PSRAM).
+4. **Flash size mismatch** — `sdkconfig` declares `CONFIG_ESPTOOLPY_FLASHSIZE_2MB` but the chip is actually 16 MB (`spi_flash: Detected size(16384k) larger than the size in the binary image header(2048k)`). App partition is 87% full; bumping to 16 MB and growing the partition would give substantial headroom. Requires `erase-flash` + reflash.
+5. **Remote event log access** — currently reading the NVS event ring requires a USB UART cable. A `/api/logs` REST endpoint that returns the last 32 events as JSON would let a remote agent inspect crash context without physical access.
+6. **Problem 2 (10-second spontaneous reboot)** — not yet reproduced while diagnostics were running; root cause unknown. Suspect brownout (large servo action + USB bus power limit) since no coredump was captured in earlier observation. When it recurs, `coredump-info` will definitively distinguish panic vs brownout.
