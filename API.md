@@ -553,3 +553,234 @@ Agent 检测到用户走神，需要吸引注意：
                                     用户注意到设备在动
 4. POST /api/mode track            → 恢复自动跟踪
 ```
+
+---
+
+## 七、MCP Tool 映射建议
+
+把 5 个 REST endpoint 包成标准 MCP tools，让 Agent 通过 MCP 协议调用。建议统一使用 `neck_` 前缀（设备在物理上是 Agent 的脖子），description 里要写清语义和模式约束，让 LLM 能自主决策。
+
+### 工具命名总览
+
+| REST endpoint | MCP Tool | 角色 |
+|---|---|---|
+| `GET /api/ping` | `neck_heartbeat` | 健康检查 |
+| `GET /api/status` | `neck_get_status` | 感知（脖子朝向 + 声源方位） |
+| `POST /api/mode` | `neck_set_mode` | 模式切换（关键状态机操作） |
+| `POST /api/point` | `neck_point` | 主动转向 |
+| `POST /api/shake` | `neck_shake` | 摇头吸引注意 |
+
+### 状态机约束（务必在 tool description 里告诉 LLM）
+
+```
+track 模式（开机默认，自动追声）
+    ↓ neck_set_mode("command")
+command 模式（Agent 接管，5 min 超时倒计时）
+    ↓ neck_point / neck_shake
+    ↓ 5 min 无操作自动切回 track
+    ↓ neck_set_mode("track")
+track 模式
+```
+
+### Tool 1：`neck_heartbeat`
+
+**Description**：检查脖子设备是否在线。无需鉴权。会话开始时调用一次确认设备可达。
+
+**Input Schema**：`{}` （无参数）
+
+**Returns**：
+```json
+{"ok": true}
+```
+
+### Tool 2：`neck_get_status`
+
+**Description**：查询脖子当前状态——舵机角度、DOA 估计的声源方位、当前模式等。**用来感知脖子在朝哪 + 听到的声音来自哪个方向**。
+
+**Input Schema**：`{}`
+
+**Returns**：
+```json
+{
+  "ok": true,
+  "mode": "track",            // "track" or "command"
+  "servo": 0.0,               // 当前舵机角度（°，-100..+100，0 = 正前方 = 6 点钟）
+  "moving": false,            // 舵机正在动作
+  "azimuth": 181,             // 声源方位估计（0..360°，0 = 12oc，180 = 6oc）
+  "sect": "6 o'clock",        // 稳定扇区（3 帧滞后）
+  "conf": 0.47,               // 置信度（0..1，<0.35 表示噪声/无声）
+  "wifi": "connected",
+  "ip": "192.168.1.105",
+  "host": "esp32-mic-24f8"
+}
+```
+
+**LLM 解读提示**（写进 description）：
+- `azimuth` 是脖子**坐标系**下的方位（脖子转动时数值会跟着变），不是房间坐标
+- `conf < 0.35` 时 `azimuth` 字段无意义（噪声帧）
+- `mode == "track"` 时脖子在自动追声，Agent **不应同时调用** `neck_point`（会被拒绝）
+- `mode == "command"` 时 Agent 完全控制舵机，DOA 字段仍可用于"听到什么"感知
+
+### Tool 3：`neck_set_mode`
+
+**Description**：切换脖子的工作模式。**调用 `neck_point` 或 `neck_shake` 之前必须先切到 command 模式**。command 模式下 5 分钟无操作会自动切回 track，长时间持有时需要定期重新调用。
+
+**Input Schema**：
+```json
+{
+  "mode": "track | command",     // required
+  "timeout": 300                  // optional, command 模式超时秒数，0 = 不自动切回（不推荐）
+}
+```
+
+**Returns**：`{"ok": true, "mode": "command"}`
+
+**LLM 调用时机**：
+- 用户要脖子主动转向或摇动 → 切 `command`
+- 用户停止说话、不再需要主动控制 → 切回 `track`（让脖子自动追声，省电省注意力）
+
+### Tool 4：`neck_point`
+
+**Description**：命令脖子转向指定方向。**仅 command 模式可用**（先用 `neck_set_mode`）。两次调用至少间隔 500ms。
+
+**Input Schema**（二选一）：
+```json
+{
+  "direction": "7oc"              // 钟点：2oc/3oc/4oc/5oc/6oc/7oc/8oc/9oc/10oc
+}
+```
+或
+```json
+{
+  "angle": 30                     // -100..+100，0 = 正前方（6oc），+100 ≈ 9:20，-100 ≈ 2:40
+}
+```
+
+**Returns**：
+```json
+{"ok": true, "servo": 30.0}
+// 若被机械极限 clamp：
+{"ok": true, "servo": 100.0, "clamped": true}
+```
+
+**LLM 调用约束**：返回 403 `mode_is_track` 时先调 `neck_set_mode(command)`；返回 429 `rate_limited` 时等 500ms 重试。
+
+### Tool 5：`neck_shake`
+
+**Description**：让脖子在当前位置 ±10° 内左右摇动 5 次（3+2 模式），持续约 7 秒。**仅 command 模式可用**。常用于吸引注意或确认指向。期间 `neck_point` 和 `neck_set_mode` 会被拒绝（返回 409 `shaking`）。
+
+**Input Schema**：`{}`
+
+**Returns**（**阻塞 ~7s 后才返回**）：
+```json
+{"ok": true}
+```
+
+### 错误响应（所有 tool 共享）
+
+失败时返回结构：
+```json
+{"ok": false, "error": "<code>", "message": "<human readable>"}
+```
+
+| `error` code | HTTP | LLM 处理建议 |
+|---|---|---|
+| `unauthorized` | 401 | device_id 错，检查 MCP server 配置 |
+| `bad_request` | 400 | 参数缺失或非法，看 `message` |
+| `mode_is_track` | 403 | 先调 `neck_set_mode("command")` |
+| `shaking` | 409 | 等 7s 后重试 |
+| `rate_limited` | 429 | 等 500ms 后重试 |
+
+MCP server 实现建议：把 error code 透传到 MCP error response，让 LLM 看到后能自主决定补救动作。
+
+### MCP Server 参考实现（Python）
+
+最简骨架，基于 [`mcp` Python SDK](https://github.com/modelcontextprotocol/python-sdk)：
+
+```python
+import requests
+from mcp import Server
+
+NECK_HOST = "esp32-mic-24f8.local"
+DEVICE_ID = "5RZT62"
+BASE = f"http://{NECK_HOST}/api"
+TIMEOUT = 15   # /api/shake 阻塞 ~7s，留余量
+
+server = Server("esp32-neck")
+
+def _call(method: str, path: str, body: dict | None = None) -> dict:
+    url = f"{BASE}{path}?device_id={DEVICE_ID}"
+    r = requests.request(method, url, json=body, timeout=TIMEOUT)
+    return r.json()
+
+@server.tool()
+def neck_heartbeat() -> dict:
+    """Check if the ESP32 neck device is online. No auth required."""
+    return _call("GET", "/ping")
+
+@server.tool()
+def neck_get_status() -> dict:
+    """Read neck state: servo angle, DOA azimuth, mode, WiFi.
+    Use to perceive where the neck points and where sound comes from.
+    Note: azimuth is in the NECK frame (changes when neck rotates);
+    ignore azimuth when conf < 0.35 (noise frame).
+    """
+    return _call("GET", "/status")
+
+@server.tool()
+def neck_set_mode(mode: str, timeout: int = 300) -> dict:
+    """Switch neck mode. CALL WITH mode='command' BEFORE neck_point/neck_shake.
+    Args:
+        mode: 'track' (auto sound-tracking, default) or 'command' (agent-controlled)
+        timeout: command-mode auto-revert timeout in seconds (default 300).
+    Command mode auto-reverts to track after `timeout` seconds of inactivity.
+    """
+    return _call("POST", "/mode", {"mode": mode, "timeout": timeout})
+
+@server.tool()
+def neck_point(direction: str | None = None, angle: int | None = None) -> dict:
+    """Point the neck at a clock direction or angle. COMMAND MODE ONLY.
+    Provide exactly one of:
+        direction: '2oc'..'10oc' (clock face)
+        angle:     -100..+100 (0 = front/6oc, +100 ≈ 9:20, -100 ≈ 2:40)
+    Rate-limited to 1 call per 500ms.
+    """
+    if direction is not None:
+        body = {"dir": direction}
+    elif angle is not None:
+        body = {"angle": angle}
+    else:
+        raise ValueError("must provide direction or angle")
+    return _call("POST", "/point", body)
+
+@server.tool()
+def neck_shake() -> dict:
+    """Shake the neck ±10° around current position for ~7 seconds.
+    COMMAND MODE ONLY. Blocks until shake completes.
+    Use to attract attention. During shake, other tools return 409 'shaking'.
+    """
+    return _call("POST", "/shake", {})
+
+if __name__ == "__main__":
+    server.run()
+```
+
+保存为 `mcp_neck_server.py`，按 MCP 文档配置 stdio transport。LLM 即可通过标准 MCP 协议调用 5 个 tool，无需知道底层 REST 细节。
+
+### Agent 工具调用顺序速查
+
+```
+会话开始 → neck_heartbeat           确认在线
+        → neck_get_status           看当前状态
+
+需要主动转向？
+    → neck_set_mode(command)
+    → neck_point(direction="7oc")   或 neck_point(angle=30)
+    → neck_get_status               确认朝向
+    → neck_set_mode(track)          不需要时切回自动
+
+需要吸引注意？
+    → neck_set_mode(command)
+    → neck_shake                    阻塞 ~7s
+    → neck_set_mode(track)
+```
