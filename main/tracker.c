@@ -16,6 +16,18 @@ static bool             s_enabled = true;
 static float            s_last_target_deg = 0.0f;   /* last commanded angle */
 static bool             s_have_target = false;      /* any command issued yet */
 
+/* BOOT GRACE PERIOD: boot sweep residual vibration + ambient noise can
+ * produce spurious DOA peaks toward the geometric blind spots (e.g., 254°
+ * near the 9oc M1-anti blind spot). The normal 0.35 conf + 2-of-3 agreement
+ * filters occasionally let these through (1 in 5 boots observed), causing
+ * the servo to dart to ±80° before correcting. During the grace window
+ * after tracker_init, require both higher confidence AND a locked
+ * stable_sextant (3 consecutive agreeing sextants) before accepting the
+ * first DOA. After the first accept, s_have_target=true disables grace. */
+#define GRACE_PERIOD_MS    3000
+#define GRACE_MIN_CONF     0.6f
+static int64_t s_init_us = 0;
+
 /* EMA + plausibility state for α_room smoothing. */
 static float s_sin_ema = 0.0f, s_cos_ema = 0.0f;
 static bool  s_ema_init = false;
@@ -77,6 +89,7 @@ void tracker_init(const tracker_config_t *cfg)
     int64_t now_us = esp_timer_get_time();
     s_last_3mic_us  = now_us;
     s_last_update_us = now_us;
+    s_init_us = now_us;  /* start of grace period */
     ESP_LOGI(TAG, "init: home=%+.1f°  deadband=%.1f°  min_conf=%.2f  "
              "out_of_range=%.0f°  agreement=%.1f°  conservative=%d  "
              "idle_return=%.0fs@%.1f°/s",
@@ -177,6 +190,19 @@ void tracker_update(const doa_result_t *doa)
     if (doa->mode != DOA_MODE_3MIC || doa->confidence < s_cfg.min_confidence) {
         s_mode = TRACKER_MODE_SUPPRESSED;
         return;
+    }
+
+    /* BOOT GRACE PERIOD: while in the first GRACE_PERIOD_MS after init AND
+     * before any target has been accepted, require stricter criteria. This
+     * filters out boot sweep residual vibration + ambient noise that produce
+     * spurious DOA peaks toward the 9oc blind spot (observed: 254° misread
+     * on 1/5 boots, causing servo to dart to +82° before correcting). */
+    if (!s_have_target &&
+        (now_us - s_init_us) < (int64_t)GRACE_PERIOD_MS * 1000) {
+        if (doa->confidence < GRACE_MIN_CONF || doa->stable_sextant < 0) {
+            s_mode = TRACKER_MODE_SUPPRESSED;
+            return;
+        }
     }
 
     /* FEED-FORWARD COMPENSATION: convert source azimuth from array frame
