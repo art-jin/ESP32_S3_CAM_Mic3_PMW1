@@ -237,9 +237,13 @@ void servo_set_smooth_step_deg(float deg_per_step)
 void servo_boot_sweep(void)
 {
     /* Waypoints: start at 0 (already there from servo_init), visit both
-     * mechanical extremes, return to 0. Passing through 0 between the two
-     * extremes gives a clear visual anchor for the home direction. */
-    static const float waypoints[] = { +100.0f, 0.0f, -100.0f, 0.0f };
+     * sweep extremes, return to 0. Passing through 0 between the two extremes
+     * gives a clear visual anchor for the home direction.
+     * Range kept to ±60° (not ±SERVO_ANGLE_MAX_DEG) because battery-powered
+     * operation browns out when boot sweep hits the mechanical clamp — the
+     * four consecutive ±100° swings draw too much current from a small
+     * battery. ±60° still gives a clear visual range confirmation. */
+    static const float waypoints[] = { +60.0f, 0.0f, -60.0f, 0.0f };
     const int n = sizeof(waypoints) / sizeof(waypoints[0]);
 
     int64_t t_start_us = esp_timer_get_time();

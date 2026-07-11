@@ -30,10 +30,14 @@
 
 /* Mechanical limits at the gear output.
  * True mechanical limit: ±101.25° (270° servo / 1.333 reduction).
- * Clamped to ±100° for 1.25° safety margin.
- * Coverage from 6oc home: ~2:40 to ~9:20 o'clock. */
-#define SERVO_ANGLE_MIN_DEG    (-100.0f)
-#define SERVO_ANGLE_MAX_DEG    (+100.0f)
+ * Originally clamped to ±100° (1.25° mechanical safety margin), but battery-
+ * powered operation showed brownout resets whenever the servo approached the
+ * mechanical extremes — startup current draw at the end of travel spikes and
+ * pulls the rail below the ESP32-S3 brownout threshold. Clamped to ±80° to
+ * avoid the high-current end-of-travel region.
+ * Coverage from 6oc home: ~3:30 to ~8:30 o'clock. */
+#define SERVO_ANGLE_MIN_DEG    (-80.0f)
+#define SERVO_ANGLE_MAX_DEG    (+80.0f)
 
 /* Servo shaft orientation switch.
  *
