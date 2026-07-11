@@ -16,6 +16,7 @@
 #include "wifi.h"
 #include "mode_manager.h"
 #include "status.h"
+#include "evlog.h"
 
 static const char *TAG = "main";
 
@@ -219,6 +220,9 @@ void app_main(void)
     }
 
     device_id_init();  /* load or generate persistent device ID */
+
+    evlog_init();  /* load prior events from NVS, increment boot counter */
+    evlog_record(EV_BOOT, 0, (int16_t)esp_reset_reason());
 
     ESP_LOGI(TAG, "=== 3DMIC-291 DOA + servo + REST API starting ===");
     ESP_LOGI(TAG, "  pins: CLK0=%d CLK1=%d DAT0=%d DAT1=%d",

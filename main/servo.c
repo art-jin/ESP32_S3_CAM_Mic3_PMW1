@@ -10,6 +10,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
+#include "evlog.h"
 
 static const char *TAG = "servo";
 
@@ -241,6 +242,8 @@ void servo_boot_sweep(void)
     static const float waypoints[] = { +100.0f, 0.0f, -100.0f, 0.0f };
     const int n = sizeof(waypoints) / sizeof(waypoints[0]);
 
+    int64_t t_start_us = esp_timer_get_time();
+
     /* Slow the ramp for the sweep so the user can see each motion clearly.
      * 2.0 deg/20ms = 100 deg/s (3x slower than tracking's 300 deg/s).
      * 100 deg move takes ~1 s. Restore default before returning so
@@ -258,5 +261,7 @@ void servo_boot_sweep(void)
     }
     /* Restore tracking-speed ramp. */
     servo_set_smooth_step_deg(saved_step);
-    ESP_LOGI(TAG, "boot sweep done, home at 0 deg");
+    int32_t duration_ms = (int32_t)((esp_timer_get_time() - t_start_us) / 1000);
+    ESP_LOGI(TAG, "boot sweep done, home at 0 deg (%ld ms)", (long)duration_ms);
+    evlog_record(EV_SWEEP_DONE, SRC_BOOT, (int16_t)duration_ms);
 }

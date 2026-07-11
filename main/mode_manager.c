@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "tracker.h"
+#include "evlog.h"
 
 static const char *TAG = "mode";
 
@@ -29,6 +30,9 @@ app_mode_t mode_manager_get(void)
 void mode_manager_set(app_mode_t mode, int timeout_s)
 {
     app_mode_t old = atomic_exchange(&s_mode, mode);
+    if (old != mode) {
+        evlog_record(EV_MODE_CHG, (uint8_t)old, (int16_t)mode);
+    }
 
     if (mode == MODE_COMMAND) {
         tracker_set_enabled(false);

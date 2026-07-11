@@ -11,6 +11,7 @@
 #include "status.h"
 #include "servo.h"
 #include "doa.h"
+#include "evlog.h"
 
 static const char *TAG = "rest";
 static httpd_handle_t s_server = NULL;
@@ -307,6 +308,7 @@ static esp_err_t handler_point(httpd_req_t *req)
     s_last_point_us = now;
     mode_manager_register_command();
     servo_set_angle_deg(target);
+    evlog_record(EV_SERVO_CMD, SRC_REST, (int16_t)target);
 
     ESP_LOGI(TAG, "point: target=%.1f clamped=%d", target, clamped);
 
@@ -352,6 +354,7 @@ static esp_err_t handler_shake(httpd_req_t *req)
     s_shaking = true;
     s_last_point_us = now;
     mode_manager_register_command();
+    evlog_record(EV_SHAKE_START, 0, (int16_t)center);
 
     /* Group 1: 3 oscillations (hi-lo-hi-lo-hi-lo). */
     for (int i = 0; i < 3; i++) {
@@ -379,6 +382,7 @@ static esp_err_t handler_shake(httpd_req_t *req)
 
     s_shaking = false;
     ESP_LOGI(TAG, "shake done, back at %.1f", center);
+    evlog_record(EV_SHAKE_END, 0, (int16_t)center);
 
     return send_json_ok(req, "{\"ok\":true}");
 }

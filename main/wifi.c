@@ -12,6 +12,7 @@
 #include "freertos/event_groups.h"
 #include "mdns.h"
 #include "wifi_creds.h"
+#include "evlog.h"
 
 /* LED indicator on GPIO 48 (board LED per XiaoZhi config). */
 #define LED_GPIO         48
@@ -96,6 +97,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         xEventGroupSetBits(s_wifi_eg, WIFI_CONNECTED_BIT);
         led_set(1);  /* LED steady on = connected */
         ESP_LOGI(TAG, "WiFi connected! IP: %s", s_ip_str);
+        evlog_record(EV_WIFI_UP, 0, 0);
 
         /* Start mDNS + HTTP server (once). */
         mdns_start();

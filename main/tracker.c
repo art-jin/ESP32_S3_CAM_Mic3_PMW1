@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "servo.h"
+#include "evlog.h"
 
 static const char *TAG = "tracker";
 
@@ -159,6 +160,7 @@ void tracker_update(const doa_result_t *doa)
                 if (new_angle > 0.0f) new_angle = 0.0f;
             }
             servo_set_angle_deg(new_angle);
+            evlog_record(EV_SERVO_CMD, SRC_IDLE, (int16_t)new_angle);
             s_last_target_deg = new_angle;
             s_last_update_us = now_us;   /* mark command time for next dt */
             s_mode = TRACKER_MODE_IDLE;
@@ -291,6 +293,11 @@ void tracker_update(const doa_result_t *doa)
     }
 
     /* Command the servo. */
+    if (!s_have_target) {
+        evlog_record(EV_DOA_FIRST, (uint8_t)doa->stable_sextant,
+                     (int16_t)doa->azimuth_deg);
+    }
+    evlog_record(EV_SERVO_CMD, SRC_TRACKER, (int16_t)target);
     servo_set_angle_deg(target);
     s_last_target_deg = target;
     s_last_update_us = now_us;   /* mark command time for idle-return dt */
