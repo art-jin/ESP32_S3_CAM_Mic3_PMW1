@@ -33,11 +33,16 @@
  * Originally clamped to ±100° (1.25° mechanical safety margin), but battery-
  * powered operation showed brownout resets whenever the servo approached the
  * mechanical extremes — startup current draw at the end of travel spikes and
- * pulls the rail below the ESP32-S3 brownout threshold. Clamped to ±80° to
- * avoid the high-current end-of-travel region.
- * Coverage from 6oc home: ~3:30 to ~8:30 o'clock. */
-#define SERVO_ANGLE_MIN_DEG    (-80.0f)
-#define SERVO_ANGLE_MAX_DEG    (+80.0f)
+ * pulls the rail below the ESP32-S3 brownout threshold.
+ *
+ * ±90° is the empirically-tuned compromise: covers 3oc and 9oc (the array's
+ * geometric blind spots are slightly beyond) while leaving ~10° margin from
+ * the mechanical limit. Earlier ±80° was over-conservative; original ±100°
+ * hit the brownout-prone end-of-travel region.
+ *
+ * Coverage from 6oc home: ~3:00 to ~9:00 o'clock. */
+#define SERVO_ANGLE_MIN_DEG    (-90.0f)
+#define SERVO_ANGLE_MAX_DEG    (+90.0f)
 
 /* Servo shaft orientation switch.
  *

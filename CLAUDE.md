@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - DOA: 6-position whistle calibration (2026-06-25), raw azimuth error **5/6 positions ≤ ±5°**, after per-sextant A1 correction **target ±3° at 4/6 positions** (s=1 unreliable — bias is non-monotonic within sextant).
 - Frame rate: **16.6 Hz** (DMA window 50 ms). CPU ~30% (DOA) + ~10% (WiFi+HTTP) = ~40%.
-- Servo tracking: **±80° range** (270° JS6620, **1.333:1 external gear**), covering **~3:30 → 8:30 o'clock** (~150° arc). Feed-forward compensation with PWM soft-start; clamped below mechanical limit to avoid battery brownout.
+- Servo tracking: **±90° range** (270° JS6620, **1.333:1 external gear**), covering **~3:00 → 9:00 o'clock** (~180° arc). Feed-forward compensation with PWM soft-start; clamped below mechanical limit to avoid battery brownout.
 - **REST API (v2.0)**: WiFi + mDNS + 4 endpoints. Two modes: **track** (auto DOA tracking, default) and **command** (REST-directed servo positioning). See "REST API" section below.
 - Boot sweep: servo tours **0 → +60 → 0 → −60 → 0** (~8.8 s) on startup. Reduced from ±100° to mitigate battery brownout (boot sweep is the worst current-peak offender).
 - **Boot grace period (v2.1)**: 3 s stricter-DOA window after tracker init — eliminates boot-sweep-residual + ambient-noise peaks that misread toward 9oc blind spot (1/5 boots pre-fix, 0/5 post-fix). See "Boot grace period" section.
@@ -77,8 +77,8 @@ Post-fix verification (5 reset cycles): 0/5 spurious darts, 5/5 first-DOA azimut
 
 | Change | File | Effect |
 |---|---|---|
-| Soft clamp ±100° → ±80° | `main/servo.h` `SERVO_ANGLE_MIN/MAX_DEG` | Avoid end-of-travel high-current region |
-| Boot sweep waypoints ±100° → ±60° | `main/servo.c` `servo_boot_sweep` | Four consecutive ±100° swings were the worst battery-killer |
+| Soft clamp ±100° → ±90° | `main/servo.h` `SERVO_ANGLE_MIN/MAX_DEG` | 10° margin from mechanical limit; still covers 3oc and 9oc |
+| Boot sweep waypoints ±100° → ±60° | `main/servo.c` `servo_boot_sweep` | Four consecutive ±100° swings were the worst battery-killer; ±60° is empirically safe |
 
 **Root cause (caught via evlog + reset reason)**: battery-powered operation triggered 3 consecutive brownout resets (ESP_RST_BROWNOUT, value=9) within ~60 seconds. Every brownout was preceded by a servo command near the ±100° mechanical limit. Captured event sequence:
 
@@ -92,7 +92,7 @@ seq 61  BOOT        value=9    ← brownout
 
 The JS6620 servo draws 500mA-1A transient current at end-of-travel. Once the battery is "depleted" by the boot sweep's four consecutive ±100° swings, even small subsequent loads pull the rail below the ESP32-S3 brownout threshold (~2.5V) → boot loop.
 
-**Trade-off**: tracking coverage shrinks from ~2:40→9:20 (~200° arc) to ~3:30→8:30 (~150° arc). Lost regions overlap with the 9oc geometric blind spot, so effective tracking loss is small.
+**Trade-off**: tracking coverage shrinks from ~2:40→9:20 (~200° arc) to ~3:00→9:00 (~180° arc). Lost regions overlap with the 9oc geometric blind spot, so effective tracking loss is small. ±90° was chosen empirically — ±80° was over-conservative (lost real 3oc/9oc coverage), ±100° hit the brownout-prone end-of-travel region.
 
 **Still open**: this is a software mitigation, not a hardware fix. For full ±100° coverage on battery, hardware changes needed: bulk capacitor (470µF electrolytic + 0.1µF ceramic) on the ESP32 5V rail, or independent 5V supply for the servo.
 
@@ -109,19 +109,19 @@ The JS6620 servo draws 500mA-1A transient current at end-of-travel. Once the bat
 | Reduction ratio | 20 / 15 = **1.333 : 1** (servo rotates 1.333× for gear to rotate 1×) |
 | Gear coverage for 270° servo travel | 270° / 1.333 = **~202.5°** of arc |
 | Mechanical limit at gear | **±101.25°** |
-| Soft clamp | **±80°** (v2.1: was ±100°, reduced to avoid end-of-travel current spikes that trigger battery brownout — see "Servo brownout mitigation" §) |
+| Soft clamp | **±90°** (v2.1: was ±100°, reduced to avoid end-of-travel current spikes that trigger battery brownout — see "Servo brownout mitigation" §) |
 | Gimbal mounting | 12 cm below mic array, at 12 o'clock direction |
 
 ### Performance (v1.6, 20T external gear + bug fix)
 
 | User position | Expected target | Measured servo | Offset | Status |
 |---|---|---|---|---|
-| 3 o'clock | -90° | -86° | +4° | ✓ tracked (was with ±100° clamp; with ±80° clamp 3oc is at the new soft limit) |
+| 3 o'clock | -90° | -86° | +4° | ✓ tracked (±90° clamp just barely allows; v2.0 ±100° had margin) |
 | 5 o'clock | -30° | -28° | +2° | ✓ perfectly stable |
 | 7 o'clock | +30° | +30° | 0° | ✓ perfectly stable |
-| 10 o'clock | +120°→clamp | +100° | clamp | was at limit (±100°); now out of range (±80° clamp) |
+| 10 o'clock | +120°→clamp | +100° | clamp | out of range under ±90° clamp (was at limit under ±100°) |
 
-**Actual coverage (v2.1, ±80° clamp)**: ~3:30 → 8:30 o'clock (~150° arc).
+**Actual coverage (v2.1, ±90° clamp)**: ~3:00 → 9:00 o'clock (~180° arc).
 Previous (v1.6-v2.0, ±100° clamp): ~2:40 → 9:20 o'clock (~200° arc).
 Earlier (50T internal gear, v1.5): 4:54 → 7:06 o'clock (±33°, ~66° arc).
 
