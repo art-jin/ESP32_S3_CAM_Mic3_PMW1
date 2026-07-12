@@ -94,7 +94,44 @@ The JS6620 servo draws 500mA-1A transient current at end-of-travel. Once the bat
 
 **Trade-off**: tracking coverage shrinks from ~2:40→9:20 (~200° arc) to ~3:00→9:00 (~180° arc). Lost regions overlap with the 9oc geometric blind spot, so effective tracking loss is small. ±90° was chosen empirically — ±80° was over-conservative (lost real 3oc/9oc coverage), ±100° hit the brownout-prone end-of-travel region.
 
-**Still open**: this is a software mitigation, not a hardware fix. For full ±100° coverage on battery, hardware changes needed: bulk capacitor (470µF electrolytic + 0.1µF ceramic) on the ESP32 5V rail, or independent 5V supply for the servo.
+### Multi-board support via board_config.h (v2.2, 2026-07-12)
+
+| Change | File | Effect |
+|---|---|---|
+| New `board_config.h` | `main/board_config.h` | Centralize the 4 board-specific GPIO (MIC_CLK1, MIC_DAT1, SERVO, LED) behind a compile-time switch |
+| Refactor GPIO references | `main/mic_capture.h`, `main/servo.h`, `main/wifi.c` | Replace hardcoded GPIO with `#include "board_config.h"` |
+
+**Why this works**: aside from 4 GPIO pins, both boards share the same software stack — identical servo electrical params (ZP10S in PWM mode matches JS6620: 500-2500µs @ 50Hz, 270° travel, 1.333:1 external gear), identical 3DMIC-291 mount orientation (sin α sign unchanged), identical feed-forward direction. No DOA / tracker / REST API changes needed.
+
+**Supported boards**:
+| Board | hostname example | Device ID example | Status |
+|---|---|---|---|
+| GOOUUU ESP32-S3-CAM | `esp32-mic-24f8.local` | (NVS-generated) | ✅ default, fully verified |
+| Waveshare ESP32-S3-Zero | `esp32-mic-b404.local` | (NVS-generated) | ✅ verified 2026-07-12: 6oc/7oc tracking + REST 9oc/6oc/3oc sequence |
+
+**To switch boards**:
+1. Edit `main/board_config.h`, comment/uncomment the `BOARD_*` #define
+2. `idf.py build`
+3. Flash to the target board (no `erase-flash` needed — partition table is shared)
+
+**Default**: `BOARD_GOOUUU_S3_CAM` is enabled on `main` branch. Switch locally when building for S3-Zero.
+
+**S3-Zero GPIO map** (for reference, defined in `board_config.h`):
+```
+3DMIC-291 CLK0 → GPIO1   (same as S3-CAM)
+3DMIC-291 DAT0 → GPIO2   (same)
+3DMIC-291 CLK1 → GPIO3   (was GPIO14 on S3-CAM)
+3DMIC-291 DAT1 → GPIO4   (was GPIO42)
+Servo signal   → GPIO5   (was GPIO38)
+LED indicator  → GPIO48  (same — on-board WS2812, may not light correctly)
+```
+
+**Verified on S3-Zero (2026-07-12)**:
+- 6oc speaking: az=181-184°, servo=+2.5° ✓
+- 7oc-8oc speaking: az=211-226°, servo tracks +0° → +32° ✓
+- REST sequence 9oc→6oc→3oc→6oc: allservo direction correct ✓
+- Boot sweep ±60° visible ✓
+- mDNS + WiFi credentials reuse ✓
 
 ## Servo hardware (v1.6, 2026-06-30)
 
