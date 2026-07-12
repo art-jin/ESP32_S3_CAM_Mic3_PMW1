@@ -5,19 +5,21 @@
 
 #include "esp_err.h"
 
-/* I²S PDM RX multi-DIN capture for the 3DMIC-291 3-mic array on the
- * GOOUUU ESP32-S3-CAM board. Pinout per ArthurReadMe.md (PMW1 build):
+#include "board_config.h"
+
+/* I²S PDM RX multi-DIN capture for the 3DMIC-291 3-mic array. Pinout
+ * (board-dependent — see board_config.h):
  *
- *   3DMIC-291  | ESP32-S3 GPIO | Role
- *   -----------+---------------+-------------------------------------------
- *   CLK0       | GPIO 1        | I²S PDM RX CLK output (drives M3 + M1)
- *   CLK1       | GPIO 14       | same I²S CLK, fanned out via GPIO matrix
- *   DAT0       | GPIO 2        | DIN[0] — M3 (L slot) + M1 (R slot) via PDM clock phase
- *   DAT1       | GPIO 42       | DIN[1] — M2 (L slot)
+ *   3DMIC-291  | GOOUUU S3-CAM | Waveshare S3-Zero | Role
+ *   -----------+----------------+--------------------+------------------------------
+ *   CLK0       | GPIO 1         | GPIO 1             | I²S PDM RX CLK output
+ *   CLK1       | GPIO 14        | GPIO 3             | same CLK, fanned out via GPIO matrix
+ *   DAT0       | GPIO 2         | GPIO 2             | DIN[0] — M2 + M1 via PDM clock phase
+ *   DAT1       | GPIO 42        | GPIO 4             | DIN[1] — M3 (L slot)
  *
  * The S3 I²S PDM RX peripheral has only one CLK pin. CLK1 is driven by
- * copying the I²S0 RX WS signal to GPIO 14 through the GPIO matrix so
- * both 3DMIC clock inputs see the same hardware edge — mandatory for DOA.
+ * copying the I²S0 RX WS signal to a second GPIO through the GPIO matrix
+ * so both 3DMIC clock inputs see the same hardware edge — mandatory for DOA.
  *
  * Note on the L/R slot collapse: empirical testing on the S3_CAM_MIC3
  * sibling project found that enabling both LINE0_SLOT_LEFT and
@@ -25,10 +27,9 @@
  * slots (the on-chip PDM2PCM collapses them). When that happens, only
  * 2 of the 3 mics are actually independent. doa_process() detects this
  * at runtime and falls back to 2-mic mode. */
-#define MIC_CLK0_GPIO     1
-#define MIC_CLK1_GPIO     14
-#define MIC_DAT0_GPIO     2
-#define MIC_DAT1_GPIO     42
+#define MIC_CLK0_GPIO     1   /* Same on both boards */
+#define MIC_DAT0_GPIO     2   /* Same on both boards */
+/* MIC_CLK1_GPIO, MIC_DAT1_GPIO defined in board_config.h */
 
 #define MIC_SAMPLE_RATE_HZ   48000
 /* DMA read window. Phase B1 (2026-06-25): reduced from 100ms to 50ms to

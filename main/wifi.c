@@ -13,9 +13,12 @@
 #include "mdns.h"
 #include "wifi_creds.h"
 #include "evlog.h"
+#include "board_config.h"
 
-/* LED indicator on GPIO 48 (board LED per XiaoZhi config). */
-#define LED_GPIO         48
+/* LED indicator for WiFi status. GPIO defined in board_config.h
+ * (typically GPIO 48 on both supported boards; on S3-Zero this is the
+ * on-board WS2812, which may not light up correctly under simple
+ * on/off GPIO drive — that's cosmetic, doesn't affect WiFi logic). */
 #define WIFI_CONNECTED_BIT  BIT0
 
 static const char *TAG = "wifi";

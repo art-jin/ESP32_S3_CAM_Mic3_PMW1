@@ -5,20 +5,22 @@
 
 #include "esp_err.h"
 
-/* JS6620 hobby servo driver via LEDC PWM.
+#include "board_config.h"
+
+/* Servo driver via LEDC PWM. Hardware details: see CLAUDE.md "Servo hardware".
  *
- * Hardware: see CLAUDE.md "Servo hardware".
- *   - JS6620 is a **270°** rotation servo
- *   - GPIO 38, 50 Hz PWM, pulse 500–2500 µs
- *   - 15T pinion on servo shaft, meshing EXTERNALLY with 20T spur gear
- *   - External mesh: pinion and gear rotate in OPPOSITE directions
- *   - Reduction 20/15 = 1.333 : 1 → 270° servo = ~202.5° gear travel
+ * Identical electrical interface on both supported boards:
+ *   - 270° rotation servo (JS6620 on S3-CAM, ZP10S in PWM mode on S3-Zero)
+ *   - 50 Hz PWM, pulse 500–2500 µs
+ *   - 15T pinion → 20T external spur gear, reduction 1.333:1
+ *   - 270° servo travel = ~202.5° gear travel
  *   - Mechanical limit at gear: ±101.25°
- *   - Soft clamp: ±100° (1.25° safety margin)
+ *
+ * Only the GPIO pin differs between boards — see board_config.h.
  *
  * Angle sign convention: looking down from above, positive angle = CW. */
 
-#define SERVO_GPIO             38
+/* SERVO_GPIO defined in board_config.h */
 
 #define SERVO_PWM_FREQ_HZ      50
 #define SERVO_PERIOD_US        (1000000 / SERVO_PWM_FREQ_HZ)   /* 20000 µs */
