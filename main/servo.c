@@ -258,7 +258,7 @@ void servo_boot_sweep(void)
     /* 1000 ms ramp + 1200 ms visual dwell at each waypoint. */
     const TickType_t step_delay = pdMS_TO_TICKS(2200);
 
-    ESP_LOGI(TAG, "boot sweep: 0 -> +100 -> 0 -> -100 -> 0");
+    ESP_LOGI(TAG, "boot sweep: 0 -> +60 -> 0 -> -60 -> 0");
     for (int i = 0; i < n; i++) {
         servo_set_angle_deg(waypoints[i]);
         vTaskDelay(step_delay);
