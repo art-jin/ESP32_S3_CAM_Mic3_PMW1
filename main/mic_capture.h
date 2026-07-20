@@ -27,9 +27,7 @@
  * slots (the on-chip PDM2PCM collapses them). When that happens, only
  * 2 of the 3 mics are actually independent. doa_process() detects this
  * at runtime and falls back to 2-mic mode. */
-#define MIC_CLK0_GPIO     1   /* Same on both boards */
-#define MIC_DAT0_GPIO     2   /* Same on both boards */
-/* MIC_CLK1_GPIO, MIC_DAT1_GPIO defined in board_config.h */
+/* All 4 mic GPIO defined in board_config.h (CLK0/DAT0 also vary on SuperMini) */
 
 #define MIC_SAMPLE_RATE_HZ   48000
 /* DMA read window. Phase B1 (2026-06-25): reduced from 100ms to 50ms to
