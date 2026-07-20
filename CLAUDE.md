@@ -101,20 +101,21 @@ The JS6620 servo draws 500mA-1A transient current at end-of-travel. Once the bat
 | New `board_config.h` | `main/board_config.h` | Centralize the 4 board-specific GPIO (MIC_CLK1, MIC_DAT1, SERVO, LED) behind a compile-time switch |
 | Refactor GPIO references | `main/mic_capture.h`, `main/servo.h`, `main/wifi.c` | Replace hardcoded GPIO with `#include "board_config.h"` |
 
-**Why this works**: aside from 4 GPIO pins, both boards share the same software stack — identical servo electrical params (ZP10S in PWM mode matches JS6620: 500-2500µs @ 50Hz, 270° travel, 1.333:1 external gear), identical 3DMIC-291 mount orientation (sin α sign unchanged), identical feed-forward direction. No DOA / tracker / REST API changes needed.
+**Why this works**: aside from GPIO pins, all three boards share the same software stack — identical servo electrical params (ZP10S in PWM mode matches JS6620: 500-2500µs @ 50Hz, 270° travel, 1.333:1 external gear), identical 3DMIC-291 mount orientation (sin α sign unchanged), identical feed-forward direction. No DOA / tracker / REST API changes needed.
 
 **Supported boards**:
 | Board | hostname example | Device ID example | Status |
 |---|---|---|---|
 | GOOUUU ESP32-S3-CAM | `esp32-mic-24f8.local` | (NVS-generated) | ✅ default, fully verified |
 | Waveshare ESP32-S3-Zero | `esp32-mic-b404.local` | (NVS-generated) | ✅ verified 2026-07-12: 6oc/7oc tracking + REST 9oc/6oc/3oc sequence |
+| ESP32-S3 SuperMini | `esp32-mic-368c.local` | (NVS-generated) | ✅ verified 2026-07-16: DOA + servo tracking + REST API |
 
 **To switch boards**:
 1. Edit `main/board_config.h`, comment/uncomment the `BOARD_*` #define
 2. `idf.py build`
 3. Flash to the target board (no `erase-flash` needed — partition table is shared)
 
-**Default**: `BOARD_GOOUUU_S3_CAM` is enabled on `main` branch. Switch locally when building for S3-Zero.
+**Default**: `BOARD_GOOUUU_S3_CAM` is enabled on `main` branch. Switch locally when building for S3-Zero or SuperMini.
 
 **S3-Zero GPIO map** (for reference, defined in `board_config.h`):
 ```
@@ -126,12 +127,32 @@ Servo signal   → GPIO5   (was GPIO38)
 LED indicator  → GPIO48  (same — on-board WS2812, may not light correctly)
 ```
 
+**SuperMini GPIO map** ⚠️ — **silkscreen +2 offset**:
+```
+3DMIC-291 CLK0 → GPIO3   (silkscreen "1", was GPIO1 on S3-CAM/S3-Zero)
+3DMIC-291 DAT0 → GPIO4   (silkscreen "2", was GPIO2)
+3DMIC-291 CLK1 → GPIO5   (silkscreen "3")
+3DMIC-291 DAT1 → GPIO6   (silkscreen "4")
+Servo signal   → GPIO7   (silkscreen "5")
+LED indicator  → GPIO48  (on-board LED, may not match)
+```
+
+SuperMini's silkscreen numbers are offset +2 from actual ESP32 GPIO numbers (silkscreen "N" = GPIO N+2). CLK0/DAT0 had to move from `mic_capture.h` hardcoded `1`/`2` to per-board `board_config.h` definitions because SuperMini uses `3`/`4` instead.
+
+**Common pitfall on SuperMini**: servo GND must be common-grounded with 3DMIC GND (and SuperMini GND). Without the GND flywire, PWM signal has no return path and servo doesn't move despite all software/commands being correct. Same wiring rule as S3-Zero battery-powered setup.
+
 **Verified on S3-Zero (2026-07-12)**:
 - 6oc speaking: az=181-184°, servo=+2.5° ✓
 - 7oc-8oc speaking: az=211-226°, servo tracks +0° → +32° ✓
 - REST sequence 9oc→6oc→3oc→6oc: allservo direction correct ✓
 - Boot sweep ±60° visible ✓
 - mDNS + WiFi credentials reuse ✓
+
+**Verified on SuperMini (2026-07-16)**:
+- DOA tracking (ac 30-300, 3-mic 12-14%, az reports correct speaker position) ✓
+- Servo tracks ±60° via REST API ✓
+- Silksreen +2 offset confirmed (SERVO_GPIO=7 works, =5 doesn't)
+- GND flywire required (servo GND ↔ 3DMIC GND)
 
 ## Servo hardware (v1.6, 2026-06-30)
 
