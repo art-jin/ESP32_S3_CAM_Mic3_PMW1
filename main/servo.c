@@ -50,12 +50,14 @@ static TimerHandle_t s_smooth_timer = NULL;
 static void write_pwm_for_angle(float angle_deg)
 {
     if (!s_init_ok) return;
-    /* Linear map: angle at gear [-101.25°, +101.25°] → pulse [500, 2500] µs.
-     * 270° servo / 1.333 reduction (20T/15T external) = 202.5° travel.
-     * slope = 2000 µs / 202.5° = 9.877 µs per gear-degree.
-     * Sign: external mesh + shaft-down, inversions cancel, no negate. */
-    float slope_us_per_deg = 2000.0f / 202.5f;
-#if SERVO_SHAFT_INSTALLED_DOWN
+    /* Linear map: angle at driven element → pulse [500, 2500] µs.
+     * Slope = 2000 µs / (servo_travel / gear_reduction).
+     *   JS6620:       2000 / (270 / 1.333) = 9.877 µs/° at gear output
+     *   MG90S direct: 2000 / (180 / 1.0)   = 11.11 µs/° at servo shaft
+     * Sign: SERVO_DIRECTION_INVERTED flips if mechanical config needs it. */
+    float travel_at_output = SERVO_TRAVEL_DEG / SERVO_GEAR_RATIO;
+    float slope_us_per_deg = 2000.0f / travel_at_output;
+#if SERVO_DIRECTION_INVERTED
     slope_us_per_deg = -slope_us_per_deg;
 #endif
     float pulse_f = SERVO_PULSE_CENTER_US + angle_deg * slope_us_per_deg;
@@ -239,11 +241,11 @@ void servo_boot_sweep(void)
     /* Waypoints: start at 0 (already there from servo_init), visit both
      * sweep extremes, return to 0. Passing through 0 between the two extremes
      * gives a clear visual anchor for the home direction.
-     * Range kept to ±60° (not ±SERVO_ANGLE_MAX_DEG) because battery-powered
-     * operation browns out when boot sweep hits the mechanical clamp — the
-     * four consecutive ±100° swings draw too much current from a small
-     * battery. ±60° still gives a clear visual range confirmation. */
-    static const float waypoints[] = { +60.0f, 0.0f, -60.0f, 0.0f };
+     * Sweep range is per-servo-model (SERVO_BOOT_SWEEP_DEG): JS6620 caps at
+     * ±60° because battery brownout was observed at ±100°; MG90S draws less
+     * current and safely handles ±80°, giving a wider visual confirmation. */
+    const float sweep = SERVO_BOOT_SWEEP_DEG;
+    float waypoints[4] = { +sweep, 0.0f, -sweep, 0.0f };
     const int n = sizeof(waypoints) / sizeof(waypoints[0]);
 
     int64_t t_start_us = esp_timer_get_time();
@@ -258,7 +260,7 @@ void servo_boot_sweep(void)
     /* 1000 ms ramp + 1200 ms visual dwell at each waypoint. */
     const TickType_t step_delay = pdMS_TO_TICKS(2200);
 
-    ESP_LOGI(TAG, "boot sweep: 0 -> +60 -> 0 -> -60 -> 0");
+    ESP_LOGI(TAG, "boot sweep: 0 -> +%.0f -> 0 -> -%.0f -> 0", sweep, sweep);
     for (int i = 0; i < n; i++) {
         servo_set_angle_deg(waypoints[i]);
         vTaskDelay(step_delay);

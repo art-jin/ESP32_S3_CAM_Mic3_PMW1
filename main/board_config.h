@@ -48,4 +48,23 @@
     #error "Pick a board in board_config.h"
 #endif
 
+/* === Pick exactly one servo model ===
+ *
+ * Decoupled from BOARD_* above: any board can drive any servo. The servo
+ * model selects mechanical/electrical params (travel, gear ratio, direction
+ * inversion, mechanical clamp, boot sweep range) in servo.h, and the
+ * feed-forward sign in tracker.c.
+ *
+ * Default: JS6620 (the original S3-CAM configuration).
+ * Switch to MG90S_DIRECT for the new S3-Zero + MG90S/SG90 direct-drive robot. */
+#define SERVO_MODEL_JS6620_EXTERNAL_GEAR   1
+// #define SERVO_MODEL_MG90S_DIRECT_DRIVE   1
+
+#if !defined(SERVO_MODEL_JS6620_EXTERNAL_GEAR) && !defined(SERVO_MODEL_MG90S_DIRECT_DRIVE)
+    #error "Pick a servo model in board_config.h"
+#endif
+#if defined(SERVO_MODEL_JS6620_EXTERNAL_GEAR) && defined(SERVO_MODEL_MG90S_DIRECT_DRIVE)
+    #error "Pick only one servo model in board_config.h"
+#endif
+
 #endif /* BOARD_CONFIG_H */

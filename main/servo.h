@@ -9,14 +9,26 @@
 
 /* Servo driver via LEDC PWM. Hardware details: see CLAUDE.md "Servo hardware".
  *
- * Identical electrical interface on both supported boards:
- *   - 270° rotation servo (JS6620 on S3-CAM, ZP10S in PWM mode on S3-Zero)
- *   - 50 Hz PWM, pulse 500–2500 µs
- *   - 15T pinion → 20T external spur gear, reduction 1.333:1
- *   - 270° servo travel = ~202.5° gear travel
- *   - Mechanical limit at gear: ±101.25°
+ * Two servo models are supported (pick one in board_config.h via SERVO_MODEL_*):
  *
- * Only the GPIO pin differs between boards — see board_config.h.
+ *   JS6620_EXTERNAL_GEAR (default):
+ *     - 270° rotation hobby PWM servo
+ *     - 50 Hz PWM, pulse 500–2500 µs
+ *     - 15T pinion → 20T external spur gear, reduction 1.333:1
+ *     - 270° servo travel = ~202.5° gear travel, mechanical limit ±101.25°
+ *     - Shaft-down + external mesh: two direction inversions cancel → net 0
+ *
+ *   MG90S_DIRECT_DRIVE:
+ *     - 180° MG90S/SG90 metal-gear micro servo
+ *     - 50 Hz PWM, pulse 500–2500 µs (same electrical interface)
+ *     - No gear reduction (1:1), shaft-up, rigid disc → robot head
+ *     - Direction empirically inverted (clone MG90S or disc mount offset);
+ *       boot sweep 0→+60→0→−60→0 observed as head going 6oc→4oc→6oc→8oc→6oc
+ *       (expected 6oc→8oc→6oc→4oc→6oc), so the slope sign must flip.
+ *
+ * Any board (BOARD_*) can drive either servo. GPIO comes from board_config.h;
+ * travel / gear / direction / limits / boot sweep range come from servo.h
+ * based on the SERVO_MODEL_* selection.
  *
  * Angle sign convention: looking down from above, positive angle = CW. */
 
@@ -25,40 +37,46 @@
 #define SERVO_PWM_FREQ_HZ      50
 #define SERVO_PERIOD_US        (1000000 / SERVO_PWM_FREQ_HZ)   /* 20000 µs */
 
-/* JS6620 pulse-width range (standard hobby servo). */
+/* Pulse-width range (identical for both supported servos). */
 #define SERVO_PULSE_MIN_US     500
 #define SERVO_PULSE_CENTER_US  1500
 #define SERVO_PULSE_MAX_US     2500
 
-/* Mechanical limits at the gear output.
- * True mechanical limit: ±101.25° (270° servo / 1.333 reduction).
- * Originally clamped to ±100° (1.25° mechanical safety margin), but battery-
- * powered operation showed brownout resets whenever the servo approached the
- * mechanical extremes — startup current draw at the end of travel spikes and
- * pulls the rail below the ESP32-S3 brownout threshold.
- *
- * ±90° is the empirically-tuned compromise: covers 3oc and 9oc (the array's
- * geometric blind spots are slightly beyond) while leaving ~10° margin from
- * the mechanical limit. Earlier ±80° was over-conservative; original ±100°
- * hit the brownout-prone end-of-travel region.
- *
- * Coverage from 6oc home: ~3:00 to ~9:00 o'clock. */
-#define SERVO_ANGLE_MIN_DEG    (-90.0f)
-#define SERVO_ANGLE_MAX_DEG    (+90.0f)
+#if defined(SERVO_MODEL_JS6620_EXTERNAL_GEAR)
 
-/* Servo shaft orientation switch.
- *
- * Current config (15T/20T external mesh, shaft-down):
- * SERVO_SHAFT_INSTALLED_DOWN = 0 (no negation needed)
- *
- * External mesh reverses direction relative to internal mesh.
- * With shaft-down + external mesh, the two direction inversions
- * (shaft flip + gear reversal) cancel out, so no negation needed.
- *
- * Verified 2026-06-30: user at 7oc → servo +30°, M3 toward 7oc ✓
- *
- * Old config (15T/50T internal mesh): was =1. */
-#define SERVO_SHAFT_INSTALLED_DOWN  0
+    /* 270° JS6620 with 1.333:1 external spur gear reduction. */
+    #define SERVO_TRAVEL_DEG           270.0f
+    #define SERVO_GEAR_RATIO           1.333f        /* 20T / 15T */
+    /* Mechanical limit at gear output: ±101.25° (270° / 1.333 / 2). Battery-
+     * brownout incidents at end-of-travel led to ±90° clamp (10° margin).
+     * ±80° was over-conservative (lost real 3oc/9oc coverage); ±100° hit the
+     * brownout-prone region. Coverage from 6oc home: ~3:00 → 9:00 o'clock. */
+    #define SERVO_ANGLE_MIN_DEG        (-90.0f)
+    #define SERVO_ANGLE_MAX_DEG        (+90.0f)
+    /* Two inversions (shaft-down + external mesh) cancel → no negate. */
+    #define SERVO_DIRECTION_INVERTED   0
+    /* Battery brownout (3x ESP_RST_BROWNOUT in 60 s) at ±100° boot sweep led
+     * to ±60° cap. Still gives a clear visual range confirmation. */
+    #define SERVO_BOOT_SWEEP_DEG       60.0f
+
+#elif defined(SERVO_MODEL_MG90S_DIRECT_DRIVE)
+
+    /* 180° MG90S/SG90, direct drive, no gear reduction. */
+    #define SERVO_TRAVEL_DEG           180.0f
+    #define SERVO_GEAR_RATIO           1.0f
+    /* 180° servo hard limit is ±90°. Use the full range — user accepts the
+     * small end-of-travel buzzing risk. If buzzing couples into the 3DMIC-291
+     * PCB and triggers L/R collapse, tighten to ±85° or ±80°. */
+    #define SERVO_ANGLE_MIN_DEG        (-90.0f)
+    #define SERVO_ANGLE_MAX_DEG        (+90.0f)
+    /* Empirical: boot sweep +60 took head to 4oc instead of 8oc, meaning
+     * +command → head CCW (opposite of JS6620). Negate slope to undo. */
+    #define SERVO_DIRECTION_INVERTED   1
+    /* MG90S draws less current than JS6620; ±80° boot sweep is brownout-safe
+     * and gives a clearer visual confirmation than ±60°. */
+    #define SERVO_BOOT_SWEEP_DEG       80.0f
+
+#endif
 
 esp_err_t servo_init(void);
 
@@ -72,15 +90,16 @@ void servo_set_pulse_us(uint32_t us);
  * [SERVO_ANGLE_MIN_DEG, SERVO_ANGLE_MAX_DEG]. */
 void servo_set_angle_deg(float angle_deg);
 
-/* Current target angle (last commanded, after clamping). Returns the
- * ring-gear angle; if you need raw servo angle, multiply by 3.33. */
+/* Current target angle (last commanded, after clamping). Returns the angle
+ * at the driven element (gear output for JS6620, shaft/disc for MG90S direct
+ * drive). For JS6620, raw servo horn angle = this × SERVO_GEAR_RATIO. */
 float servo_get_angle_deg(void);
 
-/* Boot-time sweep: 0 -> +100 -> 0 -> -100 -> 0, ~1200 ms dwell at each
- * waypoint so the user can visually confirm the home direction and full
- * range before tracking starts. Ramp runs at 100 deg/s (3x slower than
- * tracking) for visibility; tracking speed is restored after. Call once
- * after servo_init(), before starting the mic task. Total ~8.8 s. */
+/* Boot-time sweep: 0 -> ±SERVO_BOOT_SWEEP_DEG -> 0 -> ∓SERVO_BOOT_SWEEP_DEG
+ * -> 0, ~1200 ms dwell at each waypoint so the user can visually confirm the
+ * home direction and range before tracking starts. Ramp runs at 100 deg/s
+ * (3x slower than tracking) for visibility; tracking speed is restored after.
+ * Call once after servo_init(), before starting the mic task. Total ~8.8 s. */
 void servo_boot_sweep(void);
 
 /* Override the smooth-ramp step size (deg per 20 ms timer tick). Default

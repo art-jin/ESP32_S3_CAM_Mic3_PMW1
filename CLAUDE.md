@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Working (v2.1).** 360° six-direction sound source localization + wide-range servo tracking + **REST API dual-mode control** + **on-device diagnostics** on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array.
+**Working (v2.3).** 360° six-direction sound source localization + wide-range servo tracking + **REST API dual-mode control** + **on-device diagnostics** + **multi-board/multi-servo support** on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array.
 
 - DOA: 6-position whistle calibration (2026-06-25), raw azimuth error **5/6 positions ≤ ±5°**, after per-sextant A1 correction **target ±3° at 4/6 positions** (s=1 unreliable — bias is non-monotonic within sextant).
 - Frame rate: **16.6 Hz** (DMA window 50 ms). CPU ~30% (DOA) + ~10% (WiFi+HTTP) = ~40%.
@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - LED indicator (GPIO 48): slow blink = WiFi connecting, steady on = connected.
 - Direction output: UART log + physical servo pointing + **REST API JSON**.
 
-Tagged `v2.1-diagnostics`. History: `v2.0-rest-api`, `v1.7` (calibrate new board, boot sweep), `v1.6` (20T external gear + feed-forward bug fix), `v1.5` (Phase B), `v1.4` (Phase A), `v1.3` (feed-forward + pre-emphasis), `v1.2` (270° servo slope), `v1.1` (feed-forward), `servo-stable-1.0`, `servo-tracking-1.0`, `3麦阵列测试完成1.0`, `gear-15T-inner-50T-final`.
+Tagged `v2.1-diagnostics` at last commit; post-commit work in `main`: v2.2 (multi-board via board_config.h), v2.3 (multi-servo via SERVO_MODEL switch). History: `v2.0-rest-api`, `v1.7` (calibrate new board, boot sweep), `v1.6` (20T external gear + feed-forward bug fix), `v1.5` (Phase B), `v1.4` (Phase A), `v1.3` (feed-forward + pre-emphasis), `v1.2` (270° servo slope), `v1.1` (feed-forward), `servo-stable-1.0`, `servo-tracking-1.0`, `3麦阵列测试完成1.0`, `gear-15T-inner-50T-final`.
 
 ### Phase A changes (v1.4, 2026-06-25)
 
@@ -153,6 +153,34 @@ SuperMini's silkscreen numbers are offset +2 from actual ESP32 GPIO numbers (sil
 - Servo tracks ±60° via REST API ✓
 - Silksreen +2 offset confirmed (SERVO_GPIO=7 works, =5 doesn't)
 - GND flywire required (servo GND ↔ 3DMIC GND)
+
+### Multi-servo support via board_config.h (v2.3, 2026-07-25)
+
+| Change | File | Effect |
+|---|---|---|
+| New `SERVO_MODEL_*` switch | `main/board_config.h` | Compile-time selection between JS6620+gear and MG90S direct drive |
+| Parameterize slope / clamp / sweep | `main/servo.h`, `main/servo.c` | All mechanical constants per-model; no hardcoded 202.5 / 60 |
+| Rename `SERVO_SHAFT_INSTALLED_DOWN` → `SERVO_DIRECTION_INVERTED` | `main/servo.h` | Old name implied physical mounting but really gated the slope sign; new name reflects semantics |
+| Feed-forward sign per-model | `main/tracker.c` (lines 226, 266) | `#if SERVO_DIRECTION_INVERTED` selects +/- for both branches |
+
+**Why decoupled from BOARD_***: a board (GPIO map) and a servo (mechanical/electrical params) are orthogonal. Any board can drive any servo. Two independent switches → user picks both, default is JS6620 + S3-CAM (the original config).
+
+**Supported servos**:
+| Servo model | Travel | Gear | Direction | Boot sweep | Status |
+|---|---|---|---|---|---|
+| `SERVO_MODEL_JS6620_EXTERNAL_GEAR` (default) | 270° | 1.333:1 external spur | normal | ±60° | ✅ original S3-CAM config, fully verified |
+| `SERVO_MODEL_MG90S_DIRECT_DRIVE` | 180° | 1:1 direct | **inverted** | ±80° | 🆕 added 2026-07-25 for S3-Zero + MG90S robot head, hardware verified — software pending V1/V2/V3 calibration |
+
+**To switch servos**:
+1. Edit `main/board_config.h`, comment/uncomment the `SERVO_MODEL_*` #define (independent of `BOARD_*`)
+2. `idf.py build`
+3. Flash — no other files need touching
+
+**Why MG90S direction is inverted** (empirical): boot sweep `0 → +60 → 0 → −60 → 0` produced head motion `6oc → 4oc → 6oc → 8oc → 6oc`, i.e., +command → CCW (opposite of JS6620's +command → CW). Root cause unclear — most likely a clone MG90S with non-standard internal direction, or a disc-to-head mounting offset. Fix is software-only: `SERVO_DIRECTION_INVERTED=1` negates the slope, and the feed-forward sign in `tracker.c` flips to match.
+
+**MG90S mechanical clamp**: ±90° (full servo travel). User accepted the small end-of-travel buzzing risk (Q1=B). If buzzing couples into the 3DMIC-291 PCB and triggers L/R collapse (Pitfall 5), tighten to ±85° or ±80° by editing `SERVO_ANGLE_MIN/MAX_DEG` in the MG90S branch of `servo.h`.
+
+**Tuning `SERVO_TRAVEL_DEG`**: if MG90S clone has a non-standard pulse-to-angle ratio (common; ±5% spec tolerance), command `±30°/±60°/±90°` via REST and measure actual head rotation. If actual ≈ 0.9 × commanded, change `SERVO_TRAVEL_DEG` from 180.0f to ~170.0f (slope is `2000 / TRAVEL_DEG`, so smaller TRAVEL_DEG = larger slope = more rotation per degree commanded).
 
 ## Servo hardware (v1.6, 2026-06-30)
 

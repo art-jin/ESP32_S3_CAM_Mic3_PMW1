@@ -222,8 +222,15 @@ void tracker_update(const doa_result_t *doa)
      * clamp rejects anything far from 0 anyway. */
     /* Feed-forward sign: +1 if servo CW → array CW (old board),
      * -1 if servo CW → array CCW (new board, opposite gear mesh).
-     * Toggle if servo tracks away from user instead of toward. */
+     * Toggle if servo tracks away from user instead of toward.
+     * SERVO_DIRECTION_INVERTED (set in servo.h per SERVO_MODEL) drives this:
+     * the slope sign in write_pwm_for_angle() determines which way +command
+     * rotates the array, so the feed-forward sign must track it. */
+#if SERVO_DIRECTION_INVERTED
+    float alpha_room_raw = doa->azimuth_deg + servo_get_angle_deg();
+#else
     float alpha_room_raw = doa->azimuth_deg - servo_get_angle_deg();
+#endif
 
     /* Plausibility check: reject physically impossible jumps (>60° in one
      * 50ms frame). Humans can't move that fast; these are GCC-PHAT noise
@@ -261,10 +268,15 @@ void tracker_update(const doa_result_t *doa)
     float target;
     if (s_cfg.conservative_mode && doa->stable_sextant >= 0) {
         int sextant_center_az = doa->stable_sextant * 60;
-        /* Apply feed-forward here too — add current servo angle to the
-         * sextant center, then subtract 180. */
+        /* Apply feed-forward here too — sign matches the non-conservative
+         * branch (above) per SERVO_DIRECTION_INVERTED. */
+#if SERVO_DIRECTION_INVERTED
+        target = (float)sextant_center_az - servo_get_angle_deg()
+               - 180.0f + s_cfg.home_deg;
+#else
         target = (float)sextant_center_az + servo_get_angle_deg()
                - 180.0f + s_cfg.home_deg;
+#endif
     } else {
         target = alpha_room - 180.0f + s_cfg.home_deg;
     }
