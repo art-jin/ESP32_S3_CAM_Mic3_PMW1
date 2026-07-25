@@ -148,11 +148,19 @@ SuperMini's silkscreen numbers are offset +2 from actual ESP32 GPIO numbers (sil
 - Boot sweep ±60° visible ✓
 - mDNS + WiFi credentials reuse ✓
 
-**Verified on SuperMini (2026-07-16)**:
+**Verified on SuperMini (2026-07-16, with ZP10S + 15T/20T gear)**:
 - DOA tracking (ac 30-300, 3-mic 12-14%, az reports correct speaker position) ✓
 - Servo tracks ±60° via REST API ✓
 - Silksreen +2 offset confirmed (SERVO_GPIO=7 works, =5 doesn't)
 - GND flywire required (servo GND ↔ 3DMIC GND)
+
+**Verified on SuperMini (2026-07-25, with MG90S direct drive)**:
+- Board: `BOARD_ESP32_S3_SUPERMINI` + Servo: `SERVO_MODEL_MG90S_DIRECT_DRIVE`
+- GPIO map: same +2 silkscreen offset (CLK0=3/DAT0=4/CLK1=5/DAT1=6/SERVO=7)
+- V1 boot sweep: +80° → head 朝 8oc ✓, −80° → head 朝 4oc ✓ (direction inverted correct)
+- V3 DOA tracking: 6oc 说话 servo=0° (home) ✓; 8oc 说话 servo=+54.8° (朝 8oc) ✓, DOA α≈183° (feed-forward 补偿后接近 180° 目标) ✓
+- No brownout during 5+ minutes of continuous operation (USB + battery hybrid power)
+- 注意：MG90S 在 SuperMini 上 3-mic 帧率较低（ρ01 偏高），tracker decision 仍正确（基于 2-mic + EMA + agreement）
 
 ### Multi-servo support via board_config.h (v2.3, 2026-07-25)
 
@@ -169,7 +177,7 @@ SuperMini's silkscreen numbers are offset +2 from actual ESP32 GPIO numbers (sil
 | Servo model | Travel | Gear | Direction | Boot sweep | Status |
 |---|---|---|---|---|---|
 | `SERVO_MODEL_JS6620_EXTERNAL_GEAR` (default) | 270° | 1.333:1 external spur | normal | ±60° | ✅ original S3-CAM config, fully verified |
-| `SERVO_MODEL_MG90S_DIRECT_DRIVE` | 180° | 1:1 direct | **inverted** | ±80° | 🆕 added 2026-07-25 for S3-Zero + MG90S robot head, hardware verified — software pending V1/V2/V3 calibration |
+| `SERVO_MODEL_MG90S_DIRECT_DRIVE` | 180° | 1:1 direct | **inverted** | ±80° | ✅ verified 2026-07-25 on SuperMini + MG90S: V1 boot sweep direction + V3 DOA tracking both correct |
 
 **To switch servos**:
 1. Edit `main/board_config.h`, comment/uncomment the `SERVO_MODEL_*` #define (independent of `BOARD_*`)
