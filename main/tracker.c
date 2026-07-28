@@ -216,8 +216,14 @@ void tracker_update(const doa_result_t *doa)
      *   α_room = α_array + β_servo
      *   target = α_room - 180° + home
      *
-     * α_array ∈ [0, 360), β_servo ∈ [-20, +20], so α_room ∈ [-20, 380).
-     * target = α_room - 180 ∈ [-200, 200]. Clamp ±20° takes care of it.
+     * Only applies when the array rotates WITH the servo (original S3-CAM
+     * and S3-Zero builds). When the array is FIXED in the room (SuperMini
+     * build — only the servo + payload rotates), α_array IS α_room and
+     * feed-forward must be skipped entirely — not just sign-flipped — or
+     * any servo motion would spuriously shift the target.
+     *
+     * α_array ∈ [0, 360), β_servo ∈ [-90, +90], so α_room ∈ [-90, 450).
+     * target = α_room - 180 ∈ [-270, 270]. Clamp ±90° takes care of it.
      * The math doesn't need explicit wraparound handling because the
      * clamp rejects anything far from 0 anyway. */
     /* Feed-forward sign: +1 if servo CW → array CW (old board),
@@ -226,10 +232,15 @@ void tracker_update(const doa_result_t *doa)
      * SERVO_DIRECTION_INVERTED (set in servo.h per SERVO_MODEL) drives this:
      * the slope sign in write_pwm_for_angle() determines which way +command
      * rotates the array, so the feed-forward sign must track it. */
-#if SERVO_DIRECTION_INVERTED
+#if MIC_ARRAY_MOUNTED_ON_SERVO
+  #if SERVO_DIRECTION_INVERTED
     float alpha_room_raw = doa->azimuth_deg + servo_get_angle_deg();
-#else
+  #else
     float alpha_room_raw = doa->azimuth_deg - servo_get_angle_deg();
+  #endif
+#else
+    /* Fixed array: α_array is already in room frame. */
+    float alpha_room_raw = doa->azimuth_deg;
 #endif
 
     /* Plausibility check: reject physically impossible jumps (>60° in one
@@ -268,14 +279,20 @@ void tracker_update(const doa_result_t *doa)
     float target;
     if (s_cfg.conservative_mode && doa->stable_sextant >= 0) {
         int sextant_center_az = doa->stable_sextant * 60;
-        /* Apply feed-forward here too — sign matches the non-conservative
-         * branch (above) per SERVO_DIRECTION_INVERTED. */
-#if SERVO_DIRECTION_INVERTED
+        /* Apply feed-forward here too — gated by MIC_ARRAY_MOUNTED_ON_SERVO
+         * and sign-matched per SERVO_DIRECTION_INVERTED, identical to the
+         * non-conservative branch above. Fixed-array mode skips the servo
+         * offset entirely. */
+#if MIC_ARRAY_MOUNTED_ON_SERVO
+  #if SERVO_DIRECTION_INVERTED
         target = (float)sextant_center_az - servo_get_angle_deg()
                - 180.0f + s_cfg.home_deg;
-#else
+  #else
         target = (float)sextant_center_az + servo_get_angle_deg()
                - 180.0f + s_cfg.home_deg;
+  #endif
+#else
+        target = (float)sextant_center_az - 180.0f + s_cfg.home_deg;
 #endif
     } else {
         target = alpha_room - 180.0f + s_cfg.home_deg;
@@ -319,13 +336,25 @@ void tracker_update(const doa_result_t *doa)
         return;
     }
 
-    /* Velocity limit: cap single-frame target change to 15° (= 300°/s at
-     * 20Hz). Matches JS6620's physical speed limit. Prevents jarring
+    /* Velocity limit: cap single-frame target change to prevent jarring
      * large-angle jumps (e.g., user walks 3oc→7oc = 120° step); the
-     * remainder carries over to subsequent frames naturally. */
+     * remainder carries over to subsequent frames naturally.
+     *
+     * Rotating-array (array on servo): 15°/frame (~300°/s at 20 Hz). Matches
+     * JS6620's physical speed limit AND keeps the servo-buzz coupling window
+     * short — large sudden motions excite more PCB vibration.
+     *
+     * Fixed-array (SuperMini): 30°/frame (~600°/s at 20 Hz). The feedback
+     * path through PCB is gone, so we can move twice as fast per frame
+     * without risking oscillation. MG90S is rated 600°/s, so this matches
+     * its physical limit too. */
     if (s_have_target) {
         float diff = target - s_last_target_deg;
+#if MIC_ARRAY_MOUNTED_ON_SERVO
         float max_delta = 15.0f;
+#else
+        float max_delta = 30.0f;
+#endif
         if (diff > max_delta) target = s_last_target_deg + max_delta;
         if (diff < -max_delta) target = s_last_target_deg - max_delta;
     }

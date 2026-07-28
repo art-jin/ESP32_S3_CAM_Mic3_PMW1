@@ -1,9 +1,11 @@
 /* board_config.h — compile-time board selection.
  *
- * Centralizes the 4 GPIO that differ between supported boards. Other
- * constants (mechanical limits, PWM timing, DOA geometry, feed-forward
- * sign) live in their owning modules — they're identical across boards
- * given the same servo + gear + 3DMIC-291 orientation.
+ * Centralizes the 4 GPIO that differ between supported boards, plus two
+ * orthogonal switches: SERVO_MODEL_* (mechanical/electrical params, see
+ * servo.h) and MIC_ARRAY_MOUNTED_ON_SERVO (whether the 3DMIC-291 rotates
+ * with the servo or is fixed in the room, see tracker.c). Other constants
+ * (PWM timing, DOA geometry) live in their owning modules — they're
+ * identical across boards given the same 3DMIC-291 orientation.
  *
  * To switch boards: uncomment exactly one #define below, rebuild, flash.
  * No sdkconfig change needed. */
@@ -65,6 +67,30 @@
 #endif
 #if defined(SERVO_MODEL_JS6620_EXTERNAL_GEAR) && defined(SERVO_MODEL_MG90S_DIRECT_DRIVE)
     #error "Pick only one servo model in board_config.h"
+#endif
+
+/* === Mic array mounting ===
+ *
+ * Decoupled from BOARD_* and SERVO_MODEL_*: any board can run in either mode.
+ *
+ *   1 = array rotates with the servo (mounted on the rotating element).
+ *       The original S3-CAM / S3-Zero builds. Feed-forward compensation is
+ *       required in tracker.c to convert α_array → α_room; without it the
+ *       closed-loop tracker oscillates as servo motion shifts the array.
+ *
+ *   0 = array is FIXED in the room; only the servo + payload (camera, laser,
+ *       etc.) rotates. The SuperMini build. α_array IS α_room, so feed-forward
+ *       is disabled entirely (not just sign-flipped).
+ *
+ * Default per board:
+ *   GOOUUU S3-CAM, Waveshare S3-Zero: 1 (array-on-servo, original behaviour)
+ *   ESP32-S3 SuperMini:               0 (fixed array, payload-only rotation)
+ *
+ * Override by commenting the #if/#else below if your physical setup differs. */
+#if defined(BOARD_ESP32_S3_SUPERMINI)
+    #define MIC_ARRAY_MOUNTED_ON_SERVO  0
+#else
+    #define MIC_ARRAY_MOUNTED_ON_SERVO  1
 #endif
 
 #endif /* BOARD_CONFIG_H */

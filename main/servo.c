@@ -216,14 +216,29 @@ bool servo_is_moving(void)
      * that slam the servo across its range need the full 500 ms to let the
      * control loop settle and the vibration couple to decay.
      *
-     * Thresholds:
+     * Rotating-array thresholds (array mounted on servo):
      *   |delta| <  5°   → 200 ms  (small corrections, idle return)
      *   |delta| < 15°   → 350 ms  (medium tracking motions)
-     *   |delta| ≥ 15°   → 500 ms  (large swings, max settling time) */
+     *   |delta| ≥ 15°   → 500 ms  (large swings, max settling time)
+     *
+     * Fixed-array thresholds (SuperMini, mic separate from servo):
+     *   |delta| <  5°   →  30 ms  (just PWM timer settle)
+     *   |delta| < 15°   →  60 ms  (ramp 100 ms + small margin)
+     *   |delta| ≥ 15°   → 100 ms  (ramp 300 ms for full 90° swing)
+     * The fixed-array case breaks the servo-buzz → mic-PCB coupling feedback
+     * path that originally motivated the conservative 500 ms pause, so the
+     * holdoff only needs to cover the PWM soft-start ramp duration, not the
+     * acoustic settling time. */
     uint32_t holdoff_ms;
+#if MIC_ARRAY_MOUNTED_ON_SERVO
     if (s_last_delta_deg <  5.0f) holdoff_ms = 200;
     else if (s_last_delta_deg < 15.0f) holdoff_ms = 350;
     else                             holdoff_ms = SERVO_MOTION_HOLDOFF_MS;
+#else
+    if (s_last_delta_deg <  5.0f) holdoff_ms = 30;
+    else if (s_last_delta_deg < 15.0f) holdoff_ms = 60;
+    else                             holdoff_ms = 100;
+#endif
     return elapsed_ms < (int64_t)holdoff_ms;
 }
 

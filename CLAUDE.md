@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Working (v2.3).** 360° six-direction sound source localization + wide-range servo tracking + **REST API dual-mode control** + **on-device diagnostics** + **multi-board/multi-servo support** on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array.
+**Working (v2.4).** 360° six-direction sound source localization + wide-range servo tracking + **REST API dual-mode control** + **on-device diagnostics** + **multi-board/multi-servo/multi-mount support** on GOOUUU ESP32-S3-CAM + 3DMIC-291 3-mic array.
 
 - DOA: 6-position whistle calibration (2026-06-25), raw azimuth error **5/6 positions ≤ ±5°**, after per-sextant A1 correction **target ±3° at 4/6 positions** (s=1 unreliable — bias is non-monotonic within sextant).
 - Frame rate: **16.6 Hz** (DMA window 50 ms). CPU ~30% (DOA) + ~10% (WiFi+HTTP) = ~40%.
@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - LED indicator (GPIO 48): slow blink = WiFi connecting, steady on = connected.
 - Direction output: UART log + physical servo pointing + **REST API JSON**.
 
-Tagged `v2.1-diagnostics` at last commit; post-commit work in `main`: v2.2 (multi-board via board_config.h), v2.3 (multi-servo via SERVO_MODEL switch). History: `v2.0-rest-api`, `v1.7` (calibrate new board, boot sweep), `v1.6` (20T external gear + feed-forward bug fix), `v1.5` (Phase B), `v1.4` (Phase A), `v1.3` (feed-forward + pre-emphasis), `v1.2` (270° servo slope), `v1.1` (feed-forward), `servo-stable-1.0`, `servo-tracking-1.0`, `3麦阵列测试完成1.0`, `gear-15T-inner-50T-final`.
+Tagged `v2.1-diagnostics` at last commit; post-commit work in `main`: v2.2 (multi-board via board_config.h), v2.3 (multi-servo via SERVO_MODEL switch), v2.4 (configurable array mounting via MIC_ARRAY_MOUNTED_ON_SERVO). History: `v2.0-rest-api`, `v1.7` (calibrate new board, boot sweep), `v1.6` (20T external gear + feed-forward bug fix), `v1.5` (Phase B), `v1.4` (Phase A), `v1.3` (feed-forward + pre-emphasis), `v1.2` (270° servo slope), `v1.1` (feed-forward), `servo-stable-1.0`, `servo-tracking-1.0`, `3麦阵列测试完成1.0`, `gear-15T-inner-50T-final`.
 
 ### Phase A changes (v1.4, 2026-06-25)
 
@@ -189,6 +189,63 @@ SuperMini's silkscreen numbers are offset +2 from actual ESP32 GPIO numbers (sil
 **MG90S mechanical clamp**: ±90° (full servo travel). User accepted the small end-of-travel buzzing risk (Q1=B). If buzzing couples into the 3DMIC-291 PCB and triggers L/R collapse (Pitfall 5), tighten to ±85° or ±80° by editing `SERVO_ANGLE_MIN/MAX_DEG` in the MG90S branch of `servo.h`.
 
 **Tuning `SERVO_TRAVEL_DEG`**: if MG90S clone has a non-standard pulse-to-angle ratio (common; ±5% spec tolerance), command `±30°/±60°/±90°` via REST and measure actual head rotation. If actual ≈ 0.9 × commanded, change `SERVO_TRAVEL_DEG` from 180.0f to ~170.0f (slope is `2000 / TRAVEL_DEG`, so smaller TRAVEL_DEG = larger slope = more rotation per degree commanded).
+
+### Mic array mounting via board_config.h (v2.4, 2026-07-28)
+
+| Change | File | Effect |
+|---|---|---|
+| New `MIC_ARRAY_MOUNTED_ON_SERVO` switch | `main/board_config.h` | Compile-time selection: array rotates with servo (1) vs fixed in room (0) |
+| Gate feed-forward compensation | `main/tracker.c` (non-conservative + conservative branches) | When 0, skip `± servo_get_angle_deg()` entirely; α_array IS α_room |
+
+**Why decoupled from `BOARD_*` and `SERVO_MODEL_*`**: GPIO map (board), servo mechanics (model), and array mounting (frame relationship to servo) are three orthogonal axes. Any combination is valid. Three independent switches → user picks all three; defaults are S3-CAM + JS6620 + array-on-servo (the original v1.x config).
+
+**Two modes**:
+
+| Mode | Default boards | Tracker math | When to use |
+|---|---|---|---|
+| `MIC_ARRAY_MOUNTED_ON_SERVO=1` (rotating) | S3-CAM, S3-Zero | `target = α_array ± β_servo − 180° + home` | 3DMIC-291 physically mounted on the rotating gear/disc — closes the feedback loop, requires feed-forward compensation to convert α_array → α_room |
+| `MIC_ARRAY_MOUNTED_ON_SERVO=0` (fixed) | SuperMini | `target = α_array − 180° + home` | 3DMIC-291 mounted independently in the room; only the servo + payload (camera, laser, robot head) rotates. α_array is already in room frame — feed-forward must be skipped, not just sign-flipped |
+
+**Why SuperMini uses fixed mode**: this build targets a "robot head" setup where the 3DMIC-291 is mounted stationary on the robot body and the MG90S drives only a pointer/camera. In rotating mode, the tracker would add `β_servo` to α_array on every motion, spuriously shifting the target with each servo update — the array isn't actually rotating, so the offset is bogus.
+
+**To override** (e.g., if you mount a SuperMini with array-on-servo, or any other board with fixed array): edit `main/board_config.h`, change the value of `MIC_ARRAY_MOUNTED_ON_SERVO` in the relevant `#if defined(BOARD_*)` branch.
+
+**Interaction with `SERVO_DIRECTION_INVERTED`**: the two switches are orthogonal.
+- `MIC_ARRAY_MOUNTED_ON_SERVO` controls whether feed-forward is applied at all (gate)
+- `SERVO_DIRECTION_INVERTED` controls the sign of the feed-forward when applied, AND the sign of the servo's own slope in `write_pwm_for_angle()`
+- In fixed mode (`MIC_ARRAY_MOUNTED_ON_SERVO=0`), only the servo slope matters. If the payload rotates the wrong way under +command, toggle `SERVO_DIRECTION_INVERTED` — feed-forward is already skipped so no tracker-side change is needed.
+
+**Mathematical difference** (SuperMini fixed mode):
+
+```
+Rotating:  α_room = α_array ± β_servo        target = α_room − 180° + home
+Fixed:     α_room = α_array                  target = α_room − 180° + home
+```
+
+All other tracker logic (boot grace period, idle return, 2-of-3 agreement, out-of-range, ±90° clamp) is **identical** across both modes. Two parameters DO differ — see "Fixed-array speed optimizations" below.
+
+### Fixed-array speed optimizations (v2.4, 2026-07-28)
+
+The v1.x–v2.x motion-pause (200/350/500 ms) and per-frame velocity cap (15°/frame) were sized for **rotating-array mode**, where the critical failure mode is servo-motor buzz coupling through the shared PCB into the DAT0 mic pair → ρ01 collapse → phantom 3-mic DOA → tracker commands more motion → positive feedback oscillation. The long holdoff gives the acoustic energy time to decay; the slow velocity cap keeps each motion's excitation short.
+
+Fixed-array mode (SuperMini) breaks that feedback path at the physical level — the mic PCB is separate from the servo — so the defensive sizes are no longer needed. Observed in practice: 3-mic frame rate rises from ~16% (rotating) to ~20% (fixed) at the same speaking volume because ρ01 no longer collapses during servo motion.
+
+| Parameter | Rotating-array | Fixed-array | File | Why fixed-array can be aggressive |
+|---|---|---|---|---|
+| Motion-pause holdoff (small step <5°) | 200 ms | **30 ms** | `servo.c:223-237` | Only needs to cover PWM timer settle, not acoustic decay |
+| Motion-pause holdoff (medium 5-15°) | 350 ms | **60 ms** | same | Ramp time 100 ms at 6°/20ms for 30°, plus margin |
+| Motion-pause holdoff (large ≥15°) | 500 ms | **100 ms** | same | Ramp time 300 ms for full 90° swing, plus margin |
+| Per-frame velocity cap | 15°/frame (~300°/s) | **30°/frame (~600°/s)** | `tracker.c:340-355` | MG90S is rated 600°/s; no oscillation risk without PCB coupling |
+
+Both are gated by `#if MIC_ARRAY_MOUNTED_ON_SERVO` — rotating-array builds (S3-CAM, S3-Zero) keep the conservative v1.x behaviour byte-for-byte; fixed-array builds (SuperMini) get the aggressive profile.
+
+**Effective tracking rate (estimated)**:
+- Rotating-array: ~12°/s sustained (90° traversal in ~7 s, matches observed v2.3 behaviour)
+- Fixed-array: ~80°/s sustained (90° traversal in ~1 s)
+
+The 2-of-3 agreement check, deadband, idle return, boot grace period, and ±90° clamp are unchanged — those protect against true signal-level issues (GCC-PHAT noise peaks, ambient noise) that exist regardless of mechanical coupling.
+
+**Boot sweep + boot grace period still apply** in fixed mode: the servo still moves physically during boot sweep, generating some motor noise through air. Grace period (3 s, conf≥0.6, stable_sextant lock) still filters boot-time spurious DOA.
 
 ## Servo hardware (v1.6, 2026-06-30)
 
