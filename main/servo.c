@@ -244,9 +244,10 @@ bool servo_is_moving(void)
 
 void servo_set_smooth_step_deg(float deg_per_step)
 {
-    /* Clamp to sane bounds: 0.5 deg/20ms = 25 deg/s (very slow) to
-     * 10 deg/20ms = 500 deg/s (faster than default, for future use). */
-    if (deg_per_step < 0.5f) deg_per_step = 0.5f;
+    /* Clamp to sane bounds: 0.2 deg/20ms = 10 deg/s (boundary-scan slow) to
+     * 10 deg/20ms = 500 deg/s (faster than default, for future use).
+     * Lowered from 0.5 to 0.2 to enable the 10°/s boundary scan rate. */
+    if (deg_per_step < 0.2f) deg_per_step = 0.2f;
     if (deg_per_step > 10.0f) deg_per_step = 10.0f;
     s_smooth_step_deg = deg_per_step;
 }

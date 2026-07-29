@@ -36,9 +36,11 @@ static const char *TAG = "evlog";
 static SemaphoreHandle_t s_mutex = NULL;
 static uint16_t s_seq = 0;
 static uint8_t  s_idx = 0;
+static uint32_t s_boot = 0;
 
-/* Lookup table for human-readable event type in UART output. */
-static const char *ev_type_str(uint8_t type)
+/* Lookup table for human-readable event type. Exposed via evlog_type_str()
+ * for both UART boot-print and /api/logs JSON output. */
+const char *evlog_type_str(uint8_t type)
 {
     switch (type) {
         case EV_BOOT:        return "BOOT";
@@ -75,6 +77,7 @@ void evlog_init(void)
     boot++;
     nvs_set_u32(h, "boot", boot);
     nvs_commit(h);
+    s_boot = boot;   /* cache for evlog_get_boot_count() */
 
     ESP_LOGI(TAG, "=== event log: boot #%lu, seq=%u, idx=%u ===",
              (unsigned long)boot, seq, idx);
@@ -92,7 +95,7 @@ void evlog_init(void)
             && ev.type != 0) {
             ESP_LOGI(TAG, "  [%8lu ms] seq=%5u  %-11s  flags=%u  value=%d",
                      (unsigned long)ev.uptime_ms, ev.seq,
-                     ev_type_str(ev.type), ev.flags, ev.value);
+                     evlog_type_str(ev.type), ev.flags, ev.value);
         }
     }
     ESP_LOGI(TAG, "=== end event log ===");
@@ -131,4 +134,73 @@ void evlog_record(uint8_t type, uint8_t flags, int16_t value)
         s_idx = (uint8_t)((s_idx + 1) % EVLOG_CAP);
     }
     xSemaphoreGive(s_mutex);
+}
+
+/* ---- Read API (for /api/logs) ---- */
+
+int evlog_capacity(void)
+{
+    return EVLOG_CAP;
+}
+
+uint32_t evlog_get_boot_count(void)
+{
+    if (!s_mutex) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint32_t b = s_boot;
+    xSemaphoreGive(s_mutex);
+    return b;
+}
+
+/* Returns string literal or NULL. Uses a static buffer for sextant formatting
+ * (single-threaded caller in httpd; non-reentrant but safe in this usage). */
+const char *evlog_flags_str(uint8_t type, uint8_t flags)
+{
+    if (type == EV_SERVO_CMD) {
+        switch (flags) {
+            case SRC_TRACKER: return "TRACKER";
+            case SRC_REST:    return "REST";
+            case SRC_SHAKE:   return "SHAKE";
+            case SRC_IDLE:    return "IDLE";
+            case SRC_BOOT:    return "BOOT";
+            default:          return "?";
+        }
+    }
+    if (type == EV_DOA_FIRST && flags <= 5) {
+        static char s[4];
+        snprintf(s, sizeof(s), "S%u", flags);
+        return s;
+    }
+    return NULL;
+}
+
+int evlog_get_events(event_t *out, int max_count)
+{
+    if (!s_mutex) return 0;
+    if (max_count <= 0) return 0;
+
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+
+    /* Single NVS open reads all 32 blobs (mirrors evlog_init pattern). */
+    nvs_handle_t h;
+    int count = 0;
+    if (nvs_open(EVLOG_NS, NVS_READONLY, &h) == ESP_OK) {
+        int limit = (max_count < EVLOG_CAP) ? max_count : EVLOG_CAP;
+        for (int i = 0; i < limit; i++) {
+            uint8_t k = (uint8_t)((s_idx + i) % EVLOG_CAP);
+            char key[5];
+            snprintf(key, sizeof(key), "e%02u", k);
+            event_t ev;
+            size_t len = sizeof(ev);
+            if (nvs_get_blob(h, key, &ev, &len) == ESP_OK
+                && len == sizeof(ev)
+                && ev.type != 0) {
+                out[count++] = ev;
+            }
+        }
+        nvs_close(h);
+    }
+
+    xSemaphoreGive(s_mutex);
+    return count;
 }

@@ -16,6 +16,11 @@ static bool             s_enabled = true;
 static float            s_last_target_deg = 0.0f;   /* last commanded angle */
 static bool             s_have_target = false;      /* any command issued yet */
 
+/* Boundary-scan state: when the source is outside mechanical range, the
+ * servo oscillates ±scan_amplitude_deg at the nearest boundary. */
+static int64_t s_scan_phase_us  = 0;     /* zeroed on each SCAN entry */
+static float    s_scan_center_deg = 0.0f; /* +SERVO_ANGLE_MAX_DEG or -SERVO_ANGLE_MIN_DEG */
+
 /* BOOT GRACE PERIOD: boot sweep residual vibration + ambient noise can
  * produce spurious DOA peaks toward the geometric blind spots (e.g., 254°
  * near the 9oc M1-anti blind spot). The normal 0.35 conf + 2-of-3 agreement
@@ -92,12 +97,14 @@ void tracker_init(const tracker_config_t *cfg)
     s_init_us = now_us;  /* start of grace period */
     ESP_LOGI(TAG, "init: home=%+.1f°  deadband=%.1f°  min_conf=%.2f  "
              "out_of_range=%.0f°  agreement=%.1f°  conservative=%d  "
-             "idle_return=%.0fs@%.1f°/s",
+             "idle_return=%.0fs@%.1f°/s  scan=%.0f/%.0f/%.0f°@%.0f°/s",
              s_cfg.home_deg, s_cfg.deadband_deg, s_cfg.min_confidence,
              s_cfg.out_of_range_deg, s_cfg.target_agreement_deg,
              s_cfg.conservative_mode ? 1 : 0,
              s_cfg.idle_return_threshold_s,
-             s_cfg.idle_return_rate_deg_per_s);
+             s_cfg.idle_return_rate_deg_per_s,
+             s_cfg.scan_enter_deg, s_cfg.scan_exit_deg,
+             s_cfg.scan_amplitude_deg, s_cfg.scan_rate_deg_per_s);
 }
 
 void tracker_update(const doa_result_t *doa)
@@ -311,6 +318,52 @@ void tracker_update(const doa_result_t *doa)
         return;
     }
 
+    /* BOUNDARY SCAN: target is within out_of_range but past the mechanical
+     * clamp. Instead of holding still at the limit, oscillate ±amplitude
+     * around the nearest boundary to signal "I hear you but can't reach you."
+     * Hysteresis (enter > exit) prevents flicker between TRACKING and SCAN. */
+    if (s_cfg.scan_enter_deg > 0.0f) {
+        bool in_scan_now = (s_mode == TRACKER_MODE_OUT_OF_RANGE_SCAN);
+        bool should_scan = in_scan_now
+            ? (fabsf(target) >  s_cfg.scan_exit_deg)
+            : (fabsf(target) >  s_cfg.scan_enter_deg);
+
+        if (should_scan) {
+            s_scan_center_deg = (target > 0.0f)
+                ? SERVO_ANGLE_MAX_DEG : SERVO_ANGLE_MIN_DEG;
+            if (!in_scan_now) {
+                s_scan_phase_us = now_us;
+                ESP_LOGI(TAG, "scan enter: target=%.1f center=%.1f",
+                         target, s_scan_center_deg);
+            }
+            /* Triangle wave: period = 4*amplitude/rate (s).
+             * phase 0..0.25 → tri 0..1; 0.25..0.75 → 1..-1; 0.75..1 → -1..0
+             * tri ∈ [-1, +1]; scan swings INWARD from boundary. */
+            float elapsed_s = (float)(now_us - s_scan_phase_us) / 1e6f;
+            float period_s  = (4.0f * s_cfg.scan_amplitude_deg)
+                            /  s_cfg.scan_rate_deg_per_s;
+            float phase = fmodf(elapsed_s / period_s, 1.0f);
+            if (phase < 0.0f) phase += 1.0f;
+            float tri;
+            if      (phase < 0.25f) tri =  phase * 4.0f;
+            else if (phase < 0.75f) tri =  2.0f - phase * 4.0f;
+            else                    tri =  phase * 4.0f - 4.0f;
+            float sign = (s_scan_center_deg > 0.0f) ? -1.0f : +1.0f;
+            float scan_target = s_scan_center_deg
+                              + sign * tri * s_cfg.scan_amplitude_deg;
+            servo_set_angle_deg(scan_target);
+            evlog_record(EV_SERVO_CMD, SRC_TRACKER, (int16_t)scan_target);
+            s_last_target_deg = scan_target;
+            s_last_update_us  = now_us;
+            s_last_3mic_us    = now_us;   /* user speaking; suppress idle return */
+            s_mode = TRACKER_MODE_OUT_OF_RANGE_SCAN;
+            return;
+        }
+        if (in_scan_now) {
+            ESP_LOGI(TAG, "scan exit: target=%.1f", target);
+        }
+    }
+
     /* Clamp to mechanical range. */
     if (target > SERVO_ANGLE_MAX_DEG) target = SERVO_ANGLE_MAX_DEG;
     if (target < SERVO_ANGLE_MIN_DEG) target = SERVO_ANGLE_MIN_DEG;
@@ -397,6 +450,8 @@ void tracker_reset_state(void)
     s_agree_idx = 0;
     s_last_3mic_us = esp_timer_get_time();
     s_last_target_deg = 0.0f;
+    s_scan_phase_us = 0;
+    s_scan_center_deg = 0.0f;
 }
 
 void tracker_set_config(const tracker_config_t *cfg)

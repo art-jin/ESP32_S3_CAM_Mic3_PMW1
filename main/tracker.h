@@ -26,6 +26,7 @@
 typedef enum {
     TRACKER_MODE_IDLE,        /* No valid DOA — servo holds last target */
     TRACKER_MODE_TRACKING,    /* 3-mic DOA accepted, servo tracking */
+    TRACKER_MODE_OUT_OF_RANGE_SCAN, /* Source outside mechanical range — servo oscillates at boundary */
     TRACKER_MODE_SUPPRESSED,  /* 2-mic or invalid — log only, don't move */
     TRACKER_MODE_DISABLED,    /* Manually disabled for debugging */
 } tracker_mode_t;
@@ -65,6 +66,21 @@ typedef struct {
      * Slow (2-3°/s) avoids startling the user and keeps motion-pause
      * intervals short so DOA recovers quickly if speech resumes. */
     float    idle_return_rate_deg_per_s;
+
+    /* ---- Boundary scan (when source is outside mechanical range) ----
+     *
+     * When the un-clamped target exceeds scan_enter_deg, the servo
+     * oscillates ±scan_amplitude_deg around the nearest mechanical limit
+     * (±SERVO_ANGLE_MAX_DEG) at scan_rate_deg_per_s. This signals "I hear
+     * you but can't reach you" instead of sitting still.
+     *
+     * Hysteresis: enter at scan_enter_deg, exit at scan_exit_deg. The gap
+     * prevents oscillation between TRACKING and SCAN at the boundary under
+     * noisy DOA. Set scan_enter_deg=0 to disable the feature entirely. */
+    float    scan_enter_deg;
+    float    scan_exit_deg;
+    float    scan_amplitude_deg;
+    float    scan_rate_deg_per_s;
 } tracker_config_t;
 
 #define TRACKER_DEFAULT_CONFIG  { \
@@ -76,6 +92,10 @@ typedef struct {
     .target_agreement_deg = 5.0f,    \
     .idle_return_threshold_s    = 10.0f, \
     .idle_return_rate_deg_per_s = 2.5f,  \
+    .scan_enter_deg       = 95.0f,    \
+    .scan_exit_deg        = 85.0f,    \
+    .scan_amplitude_deg   = 5.0f,     \
+    .scan_rate_deg_per_s  = 10.0f,    \
 }
 
 void tracker_init(const tracker_config_t *cfg);

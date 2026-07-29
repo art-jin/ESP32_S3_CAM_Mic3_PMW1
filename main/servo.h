@@ -64,11 +64,14 @@
     /* 180° MG90S/SG90, direct drive, no gear reduction. */
     #define SERVO_TRAVEL_DEG           180.0f
     #define SERVO_GEAR_RATIO           1.0f
-    /* 180° servo hard limit is ±90°. Use the full range — user accepts the
-     * small end-of-travel buzzing risk. If buzzing couples into the 3DMIC-291
-     * PCB and triggers L/R collapse, tighten to ±85° or ±80°. */
-    #define SERVO_ANGLE_MIN_DEG        (-90.0f)
-    #define SERVO_ANGLE_MAX_DEG        (+90.0f)
+    /* 180° servo hard limit is ±90°. Clamp to ±85° leaves a 5° margin from
+     * the mechanical end-stop to avoid buzzing, current spikes, and the
+     * "past 9oc / before 3oc" overshoot caused by typical MG90S clone travel
+     * tolerance (±5%, often 190–200° actual travel). If still overshooting,
+     * drop to ±80°; if buzzing couples into the 3DMIC-291 PCB and triggers
+     * L/R collapse, drop further. */
+    #define SERVO_ANGLE_MIN_DEG        (-85.0f)
+    #define SERVO_ANGLE_MAX_DEG        (+85.0f)
     /* Empirical: boot sweep +60 took head to 4oc instead of 8oc, meaning
      * +command → head CCW (opposite of JS6620). Negate slope to undo. */
     #define SERVO_DIRECTION_INVERTED   1
@@ -104,7 +107,8 @@ void servo_boot_sweep(void);
 
 /* Override the smooth-ramp step size (deg per 20 ms timer tick). Default
  * is SERVO_SMOOTH_STEP_DEG (6 deg = 300 deg/s). Smaller = slower, more
- * visible motion. Clamped to [0.5, 10]. */
+ * visible motion. Clamped to [0.2, 10] — 0.2 deg/20ms = 10 deg/s, used
+ * by the tracker's boundary-scan mode. */
 void servo_set_smooth_step_deg(float deg_per_step);
 
 /* True if the servo was commanded to a new target within the holdoff

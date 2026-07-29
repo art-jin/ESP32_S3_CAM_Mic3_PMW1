@@ -52,4 +52,27 @@ void evlog_init(void);
 /* Record an event. Thread-safe. No-op if evlog_init hasn't run yet. */
 void evlog_record(uint8_t type, uint8_t flags, int16_t value);
 
+/* ---- Read API (for /api/logs) ---- */
+
+/* Ring buffer capacity (32). */
+int evlog_capacity(void);
+
+/* Current boot counter (1 on first boot). Thread-safe. */
+uint32_t evlog_get_boot_count(void);
+
+/* Copy up to max_count events into out[], in write order (oldest→newest).
+ * Empty slots (type==0) are skipped. Returns the number copied.
+ * Thread-safe; takes the internal mutex for the duration of the NVS reads. */
+int evlog_get_events(event_t *out, int max_count);
+
+/* Human-readable type name (e.g., EV_SERVO_CMD → "SERVO_CMD").
+ * Returns string literal; "?" if unknown. */
+const char *evlog_type_str(uint8_t type);
+
+/* Human-readable flags string. Returns:
+ *   - "TRACKER" / "REST" / "SHAKE" / "IDLE" / "BOOT" for EV_SERVO_CMD
+ *   - "S0".."S5" for EV_DOA_FIRST (sextant)
+ *   - NULL when flags field has no meaningful string (caller should omit) */
+const char *evlog_flags_str(uint8_t type, uint8_t flags);
+
 #endif /* EVLOG_H */

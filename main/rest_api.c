@@ -201,6 +201,58 @@ static esp_err_t handler_status(httpd_req_t *req)
     return send_json_ok(req, body);
 }
 
+/* GET /api/logs?device_id=XXXX
+ * Returns last 32 evlog events as compact JSON. Heap-allocates the response
+ * (up to ~3 KB); caller (httpd task) frees on completion. */
+static esp_err_t handler_logs(httpd_req_t *req)
+{
+    if (!check_auth(req)) return ESP_OK;
+
+    int cap = evlog_capacity();
+    event_t *events = malloc((size_t)cap * sizeof(event_t));
+    if (!events) {
+        return send_error(req, 500, "oom", "cannot allocate events buffer");
+    }
+    int n = evlog_get_events(events, cap);
+    uint32_t boot = evlog_get_boot_count();
+
+    /* Worst case: 32 events × ~85 bytes + envelope ≈ 2.8 KB */
+    char *body = malloc(3200);
+    if (!body) {
+        free(events);
+        return send_error(req, 500, "oom", "cannot allocate response buffer");
+    }
+
+    int pos = snprintf(body, 3200,
+        "{\"ok\":true,\"boot\":%lu,\"events\":[",
+        (unsigned long)boot);
+
+    for (int i = 0; i < n && pos < 3000; i++) {
+        const char *tstr = evlog_type_str(events[i].type);
+        const char *fstr = evlog_flags_str(events[i].type, events[i].flags);
+        pos += snprintf(body + pos, (size_t)(3200 - pos),
+            "%s{\"seq\":%u,\"ms\":%lu,\"type\":\"%s\"",
+            (i > 0 ? "," : ""),
+            events[i].seq,
+            (unsigned long)events[i].uptime_ms,
+            tstr);
+        if (fstr) {
+            pos += snprintf(body + pos, (size_t)(3200 - pos),
+                ",\"flags\":\"%s\"", fstr);
+        }
+        pos += snprintf(body + pos, (size_t)(3200 - pos),
+            ",\"value\":%d}", events[i].value);
+    }
+
+    pos += snprintf(body + pos, (size_t)(3200 - pos), "]}");
+    (void)pos;
+
+    free(events);
+    esp_err_t r = send_json_ok(req, body);
+    free(body);
+    return r;
+}
+
 /* POST /api/mode?device_id=XXXX
  * Body: {"mode":"command"} or {"mode":"track"}
  * Optional: {"mode":"command","timeout":0}  (0 = no auto-return)
@@ -413,6 +465,9 @@ esp_err_t rest_api_start(void)
     static const httpd_uri_t uri_status = {
         .uri = "/api/status", .method = HTTP_GET, .handler = handler_status
     };
+    static const httpd_uri_t uri_logs = {
+        .uri = "/api/logs", .method = HTTP_GET, .handler = handler_logs
+    };
     static const httpd_uri_t uri_mode = {
         .uri = "/api/mode", .method = HTTP_POST, .handler = handler_mode
     };
@@ -428,11 +483,12 @@ esp_err_t rest_api_start(void)
 
     httpd_register_uri_handler(s_server, &uri_ping);
     httpd_register_uri_handler(s_server, &uri_status);
+    httpd_register_uri_handler(s_server, &uri_logs);
     httpd_register_uri_handler(s_server, &uri_mode);
     httpd_register_uri_handler(s_server, &uri_point);
     httpd_register_uri_handler(s_server, &uri_shake);
     httpd_register_uri_handler(s_server, &uri_options);
 
-    ESP_LOGI(TAG, "REST API started: /api/ping /api/status /api/mode /api/point /api/shake");
+    ESP_LOGI(TAG, "REST API started: /api/ping /api/status /api/logs /api/mode /api/point /api/shake");
     return ESP_OK;
 }
