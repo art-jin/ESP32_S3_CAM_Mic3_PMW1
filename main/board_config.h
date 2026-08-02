@@ -13,9 +13,9 @@
 #define BOARD_CONFIG_H
 
 /* === Pick exactly one board === */
-#define BOARD_GOOUUU_S3_CAM    1
+// #define BOARD_GOOUUU_S3_CAM    1
 // #define BOARD_WAVESHARE_S3_ZERO_M   1
-// #define BOARD_ESP32_S3_SUPERMINI    1
+#define BOARD_ESP32_S3_SUPERMINI    1
 
 #if defined(BOARD_GOOUUU_S3_CAM)
     /* GOOUUU ESP32-S3-CAM + 3DMIC-291 + JS6620 (270° PWM servo, 15T/20T external gear) */
@@ -25,6 +25,7 @@
     #define MIC_DAT1_GPIO       42
     #define SERVO_GPIO          38
     #define LED_GPIO            48
+    #define ENABLE_EPD          0    /* no e-ink wiring on this board */
 
 #elif defined(BOARD_WAVESHARE_S3_ZERO_M)
     /* Waveshare ESP32-S3-Zero + 3DMIC-291 + ZP10S (PWM mode, 15T/20T external gear) */
@@ -34,6 +35,7 @@
     #define MIC_DAT1_GPIO       4
     #define SERVO_GPIO          5
     #define LED_GPIO            48   /* On-board WS2812, may not light correctly */
+    #define ENABLE_EPD          0    /* no e-ink wiring on this board */
 
 #elif defined(BOARD_ESP32_S3_SUPERMINI)
     /* ESP32-S3 SuperMini + 3DMIC-291 + ZP10S (PWM mode, 15T/20T external gear)
@@ -45,6 +47,35 @@
     #define MIC_DAT1_GPIO       6    /* silkscreen "4" */
     #define SERVO_GPIO          7    /* silkscreen "5" */
     #define LED_GPIO            48   /* On-board LED, may not match */
+
+    /* Static IP — pinned so external callers can always reach this device at
+     * the same address regardless of which physical board is flashed (the
+     * original "红太狼" board was 4T1VMF @ 192.168.1.110; this replacement
+     * inherits that identity). Gateway/netmask validated against the host
+     * network (192.168.1.1 / 24) on 2026-08-02. */
+    #define USE_STATIC_IP       1
+    #define STATIC_IP_ADDR      "192.168.1.110"
+    #define STATIC_IP_GW        "192.168.1.1"
+    #define STATIC_IP_NETMASK   "255.255.255.0"
+    #define STATIC_IP_DNS       "192.168.1.1"
+
+    /* E-ink (SSD1683) wiring — DISABLED 2026-07-29.
+     * Hardware verification pending (panel not responding to SPI; likely
+     * wiring issue or RES-pin-not-connected causing SSD1683 to stay in
+     * undefined state). When re-enabling:
+     *   1. Verify each wire's silkscreen number on SuperMini side
+     *   2. Confirm EVK011-C pin labels match (SCK/MOSI/CS/D-C/BS/BUSY)
+     *   3. Strongly consider connecting RES — without it, no way to recover
+     *      SSD1683 from undefined state
+     * GPIO map below assumes silkscreen 8-13 = GPIO 10-15 (+2 offset).
+     * RES pin is intentionally NOT connected (per original user wiring). */
+    #define ENABLE_EPD          0
+    #define EPD_SCK_GPIO        10   /* silkscreen "8" */
+    #define EPD_MOSI_GPIO       11   /* silkscreen "9" */
+    #define EPD_CS_GPIO         12   /* silkscreen "10" */
+    #define EPD_DC_GPIO         13   /* silkscreen "11" */
+    #define EPD_BS_GPIO         14   /* silkscreen "12", driven LOW for 4-wire SPI */
+    #define EPD_BUSY_GPIO       15   /* silkscreen "13", input + internal pull-down */
 
 #else
     #error "Pick a board in board_config.h"
@@ -59,8 +90,8 @@
  *
  * Default: JS6620 (the original S3-CAM configuration).
  * Switch to MG90S_DIRECT for the new S3-Zero + MG90S/SG90 direct-drive robot. */
-#define SERVO_MODEL_JS6620_EXTERNAL_GEAR   1
-// #define SERVO_MODEL_MG90S_DIRECT_DRIVE   1
+// #define SERVO_MODEL_JS6620_EXTERNAL_GEAR   1
+#define SERVO_MODEL_MG90S_DIRECT_DRIVE   1
 
 #if !defined(SERVO_MODEL_JS6620_EXTERNAL_GEAR) && !defined(SERVO_MODEL_MG90S_DIRECT_DRIVE)
     #error "Pick a servo model in board_config.h"

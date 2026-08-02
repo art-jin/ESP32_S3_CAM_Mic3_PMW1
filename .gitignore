@@ -32,6 +32,9 @@ flasher_args.json # Generated in build directory
 sdkconfig.old
 sdkconfig
 
+# Exception: NVS partition image used to clone Device ID across boards
+!tools/nvs_device_id.bin
+
 # ESP-IDF dependencies
 # For older versions or manual component management
 /components/.idf/

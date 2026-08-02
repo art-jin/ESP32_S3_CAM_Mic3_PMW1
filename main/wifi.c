@@ -7,6 +7,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "lwip/ip4_addr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -31,6 +32,36 @@ static bool s_http_started = false;
 
 /* Forward declarations for rest_api (avoid circular include). */
 extern esp_err_t rest_api_start(void);
+
+/* Static IP — when USE_STATIC_IP is set in board_config.h, pin the STA
+ * interface to a fixed IPv4 instead of using DHCP. Used for the
+ * "红太狼" replacement board so external callers can keep using
+ * 192.168.1.110 across physical-board swaps without router DHCP
+ * reservation. No-op (empty inline) when disabled — other boards
+ * keep default DHCP behaviour. */
+#if defined(USE_STATIC_IP) && USE_STATIC_IP
+static void static_ip_apply(esp_netif_t *netif)
+{
+    /* DHCP client must be stopped before set_ip_info takes effect. */
+    esp_netif_dhcpc_stop(netif);  /* ok if this errors — pre-start */
+
+    esp_netif_ip_info_t ip = {0};
+    ip4addr_aton(STATIC_IP_ADDR,    (ip4_addr_t *)&ip.ip);
+    ip4addr_aton(STATIC_IP_GW,      (ip4_addr_t *)&ip.gw);
+    ip4addr_aton(STATIC_IP_NETMASK, (ip4_addr_t *)&ip.netmask);
+    esp_netif_set_ip_info(netif, &ip);
+
+    esp_netif_dns_info_t dns = {0};
+    ip4addr_aton(STATIC_IP_DNS, (ip4_addr_t *)&dns.ip.u_addr.ip4);
+    dns.ip.type = ESP_IPADDR_TYPE_V4;
+    esp_netif_set_dns_info(netif, ESP_NETIF_DNS_MAIN, &dns);
+
+    ESP_LOGI(TAG, "Static IP applied: %s / %s / gw %s / dns %s",
+             STATIC_IP_ADDR, STATIC_IP_NETMASK, STATIC_IP_GW, STATIC_IP_DNS);
+}
+#else
+static void static_ip_apply(esp_netif_t *netif) { (void)netif; }
+#endif
 
 /* ---- LED indicator ---- */
 static void led_init(void)
@@ -130,6 +161,10 @@ esp_err_t wifi_init(void)
         WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
+
+    /* Apply static IP before wifi_start() so DHCP client doesn't grab a
+     * router-assigned address first. */
+    static_ip_apply(s_sta_netif);
 
     wifi_config_t wifi_cfg = {
         .sta = {
