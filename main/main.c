@@ -17,7 +17,6 @@
 #include "mode_manager.h"
 #include "status.h"
 #include "evlog.h"
-#include "epd_task.h"
 
 static const char *TAG = "main";
 
@@ -242,10 +241,6 @@ void app_main(void)
     /* WiFi — non-blocking, connects in background. REST API starts
      * automatically once IP is obtained. Track mode works without WiFi. */
     wifi_init();
-
-    /* E-ink task — gracefully degrades to no-op if ENABLE_EPD=0 or hardware
-     * absent. mic_task + servo + REST API are unaffected either way. */
-    epd_task_create();
 
     /* 8 KB stack covers the FFT scratch (static) + libc math + ESP_LOG. */
     xTaskCreate(mic_task, "mic", 8192, NULL,

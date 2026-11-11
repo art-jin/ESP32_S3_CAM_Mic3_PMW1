@@ -25,7 +25,6 @@
     #define MIC_DAT1_GPIO       42
     #define SERVO_GPIO          38
     #define LED_GPIO            48
-    #define ENABLE_EPD          0    /* no e-ink wiring on this board */
 
 #elif defined(BOARD_WAVESHARE_S3_ZERO_M)
     /* Waveshare ESP32-S3-Zero + 3DMIC-291 + ZP10S (PWM mode, 15T/20T external gear) */
@@ -35,7 +34,6 @@
     #define MIC_DAT1_GPIO       4
     #define SERVO_GPIO          5
     #define LED_GPIO            48   /* On-board WS2812, may not light correctly */
-    #define ENABLE_EPD          0    /* no e-ink wiring on this board */
 
 #elif defined(BOARD_ESP32_S3_SUPERMINI)
     /* ESP32-S3 SuperMini + 3DMIC-291 + ZP10S (PWM mode, 15T/20T external gear)
@@ -59,23 +57,8 @@
     #define STATIC_IP_NETMASK   "255.255.255.0"
     #define STATIC_IP_DNS       "192.168.1.1"
 
-    /* E-ink (SSD1683) wiring — DISABLED 2026-07-29.
-     * Hardware verification pending (panel not responding to SPI; likely
-     * wiring issue or RES-pin-not-connected causing SSD1683 to stay in
-     * undefined state). When re-enabling:
-     *   1. Verify each wire's silkscreen number on SuperMini side
-     *   2. Confirm EVK011-C pin labels match (SCK/MOSI/CS/D-C/BS/BUSY)
-     *   3. Strongly consider connecting RES — without it, no way to recover
-     *      SSD1683 from undefined state
-     * GPIO map below assumes silkscreen 8-13 = GPIO 10-15 (+2 offset).
-     * RES pin is intentionally NOT connected (per original user wiring). */
-    #define ENABLE_EPD          0
-    #define EPD_SCK_GPIO        10   /* silkscreen "8" */
-    #define EPD_MOSI_GPIO       11   /* silkscreen "9" */
-    #define EPD_CS_GPIO         12   /* silkscreen "10" */
-    #define EPD_DC_GPIO         13   /* silkscreen "11" */
-    #define EPD_BS_GPIO         14   /* silkscreen "12", driven LOW for 4-wire SPI */
-    #define EPD_BUSY_GPIO       15   /* silkscreen "13", input + internal pull-down */
+    /* GPIO 10-15 (silkscreen "8"-"13") are FREE — previously reserved for the
+     * EPD e-ink experiment, removed 2026-09-02 (hardware never verified). */
 
 #else
     #error "Pick a board in board_config.h"
